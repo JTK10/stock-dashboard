@@ -6,6 +6,8 @@ import json
 
 # --- CONFIG ---
 S3_BUCKET = "jtscanner"
+# Update REQUIRED_COLUMNS to reflect the actual column names in your JSON
+REQUIRED_COLUMNS = ['InstrumentKey', 'Name', 'Date', 'Time', 'Signal', 'BrokenLevel', 'LevelValue', 'SignalPrice']
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Stock Scanner Dashboard", layout="wide")
@@ -37,6 +39,7 @@ def load_latest_json_from_s3():
         return pd.DataFrame()
         
     buf.seek(0)
+    # The JSON data is an array of objects, which is correctly read by pd.read_json(buf)
     return pd.read_json(buf)
 
 # --- MAIN APP LOGIC ---
@@ -47,36 +50,50 @@ try:
         st.success("✅ Data loaded. No new alerts found in the latest file.")
         st.stop() 
 
+    # --- VALIDATE COLUMNS ---
+    # Check that the critical filtering columns exist
+    critical_cols = ['Signal', 'BrokenLevel']
+    missing_cols = [col for col in critical_cols if col not in df.columns]
+    
+    if missing_cols:
+        st.error(f"❌ Alert file is missing critical columns for filtering: {', '.join(missing_cols)}. Cannot proceed with filters.")
+        st.dataframe(df, use_container_width=True)
+        st.stop()
+        
+    # --------------------------------
     # --- FILTER IMPLEMENTATION START ---
+    # --------------------------------
     
     st.sidebar.header("Filter Alerts")
     
-    # 1. Filter for 'signal'
-    all_signals = df['signal'].unique().tolist()
+    # 1. Filter for 'Signal' (using the correct capitalization)
+    all_signals = df['Signal'].unique().tolist()
     selected_signals = st.sidebar.multiselect(
         'Select Signal Type',
         options=all_signals,
         default=all_signals 
     )
 
-    # 2. Filter for 'initial_broken_level'
-    # Use the filtered signal list to determine the available levels for better user experience
-    temp_df = df[df['signal'].isin(selected_signals)]
-    all_levels = temp_df['initial_broken_level'].unique().tolist()
+    # 2. Filter for 'BrokenLevel' (using the correct capitalization)
+    # Base the available levels on the currently filtered signals
+    temp_df = df[df['Signal'].isin(selected_signals)]
+    all_levels = temp_df['BrokenLevel'].unique().tolist()
     
     selected_levels = st.sidebar.multiselect(
-        'Select Initial Broken Level',
+        'Select Broken Level',
         options=all_levels,
         default=all_levels
     )
 
     # 3. Apply the filters to the final DataFrame
     df_filtered = df[
-        (df['signal'].isin(selected_signals)) &
-        (df['initial_broken_level'].isin(selected_levels))
+        (df['Signal'].isin(selected_signals)) &
+        (df['BrokenLevel'].isin(selected_levels))
     ]
 
+    # --------------------------------
     # --- FILTER IMPLEMENTATION END ---
+    # --------------------------------
 
     st.success(f"Displaying {len(df_filtered)} of {len(df)} total alerts.")
     
@@ -85,11 +102,12 @@ try:
         df_filtered, 
         use_container_width=True,
         disabled=True, 
+        # Configure the 'Time' column for better display
         column_config={
-            "breakout_time": st.column_config.DatetimeColumn("Time", format="HH:mm:ss")
+            "Time": st.column_config.TextColumn("Time") 
         }
     )
     
 except Exception as e:
-    st.error(f"❌ Could not load data from S3: {e}")
+    st.error(f"❌ An unexpected error occurred: {e}")
     st.stop()
