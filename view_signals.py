@@ -7,7 +7,7 @@ import json
 # --- CONFIG ---
 S3_BUCKET = "jtscanner"
 # Update REQUIRED_COLUMNS to reflect the actual column names in your JSON
-REQUIRED_COLUMNS = ['InstrumentKey', 'Name', 'Date', 'Time', 'Signal', 'BrokenLevel', 'LevelValue', 'SignalPrice']
+REQUIRED_COLUMNS = ['Name', 'Date', 'Time', 'Signal', 'BrokenLevel', 'LevelValue', 'SignalPrice']
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Stock Scanner Dashboard", layout="wide")
@@ -111,3 +111,4 @@ try:
 except Exception as e:
     st.error(f"❌ An unexpected error occurred: {e}")
     st.stop()
+
