@@ -126,11 +126,15 @@ try:
     if 'Name' in df_filtered.columns:
         
         # 1. Define a map to correct special ticker names.
-        #    Add any other symbols that have hyphens, ampersands, or other issues.
+        #    TradingView often requires names without hyphens, ampersands, or other special characters.
+        #    Add any problematic symbols from your data (like the ones in your image) here.
         TICKER_CORRECTIONS = {
+            # Known corrections for Indian tickers:
             "BAJAJ-AUTO": "BAJAJAUTO",
-            "M&M": "M_M"
-            # Add other corrections here if needed
+            "M&M": "M_M",
+            "M&MFIN": "M_MFIN", 
+            # ADD YOUR SPECIFIC CORRECTIONS HERE IF LINKS ARE BROKEN:
+            # "NAME_FROM_S3_DATA": "CORRECT_TRADINGVIEW_NAME", 
         }
 
         # 2. Create a new column with the corrected names.
