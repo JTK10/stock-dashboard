@@ -101,37 +101,58 @@ try:
     # --------------------------------
 
     # --- Add TradingView Link Column ---
+    column_config = {} # Initialize empty config
+    
     if 'Name' in df_filtered.columns:
-        # Create the full symbol (e.g., "NSE:RELIANCE")
-        df_filtered['Symbol'] = DEFAULT_EXCHANGE + ":" + df_filtered['Name']
         
-        # --- THIS IS THE MODIFIED LINE ---
-        # We add "&interval=5" to the end of the URL
+        # 1. Define a map to correct special ticker names.
+        #    Add any other symbols that have hyphens, ampersands, or other issues.
+        TICKER_CORRECTIONS = {
+            "BAJAJ-AUTO": "BAJAJAUTO",
+            "M&M": "M_M"
+            # Add other corrections here if needed
+        }
+
+        # 2. Create a new column with the corrected names.
+        #    It uses the correction map; if a name isn't in the map, it keeps the original.
+        df_filtered['Cleaned_Name'] = df_filtered['Name'].replace(TICKER_CORRECTIONS)
+        
+        # 3. Create the full symbol (e.g., "NSE:M_M") using the CLEANED name
+        df_filtered['Symbol'] = DEFAULT_EXCHANGE + ":" + df_filtered['Cleaned_Name']
+        
+        # 4. Generate the link using the corrected 'Symbol'
+        #    This is the same line as before [cite: 18]
         df_filtered['TradingView'] = "https://www.tradingview.com/chart/?symbol=" + df_filtered['Symbol'] + "&interval=5"
-        # --- END MODIFICATION ---
+
+        st.success(f"Displaying {len(df_filtered)} of {len(df)} total alerts.")
+        
+        # 5. Configure columns for display
+        column_config={
+            "Time": st.column_config.TextColumn("Time"),
+            "TradingView": st.column_config.LinkColumn(
+                "TradingView",
+                display_text="Open 5m Chart 📈" # [cite: 20]
+            ),
+            # Hide the helper columns we created
+            "Symbol": None, 
+            "Cleaned_Name": None
+        }
 
     else:
-        st.warning("⚠️ 'Name' column not found. Cannot generate TradingView links.")
+        st.warning("⚠️ 'Name' column not found. Cannot generate TradingView links.") [cite: 18, 19]
+        st.success(f"Displaying {len(df_filtered)} of {len(df)} total alerts.")
 
-    st.success(f"Displaying {len(df_filtered)} of {len(df)} total alerts.")
     
     # Display the filtered data using st.data_editor
     st.data_editor(
         df_filtered, 
         use_container_width=True,
         disabled=True, 
-        # Configure columns, including the link
-        column_config={
-            "Time": st.column_config.TextColumn("Time"),
-            "TradingView": st.column_config.LinkColumn(
-                "TradingView",             # Column header
-                display_text="Open 5m Chart 📈" # Updated link text
-            ),
-            # Optional: Hide the helper 'Symbol' column we created
-            "Symbol": None, 
-        }
+        # Apply the column config
+        column_config=column_config
+    )
     )
     
 except Exception as e:
     st.error(f"❌ An unexpected error occurred: {e}")
-    st.stop()
+    st.stop()s
