@@ -7,10 +7,6 @@ import json
 # --- CONFIG ---
 S3_BUCKET = "jtscanner"
 
-# ASSUMPTION: All symbols are from this exchange. Change if needed.
-# Examples: "NSE", "BSE", "NASDAQ", "NYSE"
-DEFAULT_EXCHANGE = "NSE" 
-
 # Update REQUIRED_COLUMNS to reflect the actual column names in your JSON
 REQUIRED_COLUMNS = ['Name', 'Date', 'Time', 'Signal', 'BrokenLevel', 'LevelValue', 'SignalPrice']
 
@@ -135,3 +131,4 @@ try:
 except Exception as e:
     st.error(f"❌ An unexpected error occurred: {e}")
     st.stop()
+
