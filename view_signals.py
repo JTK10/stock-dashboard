@@ -22,13 +22,20 @@ st.title("📊 Stock Scanner Dashboard")
 @st.cache_data(ttl=300)
 def load_latest_json_from_s3():
     """Automatically get the latest sent_alerts_log_*.json file."""
-    s3 = boto3.client("s3")
+    # Ensure AWS credentials are configured in the environment or Streamlit secrets
+    try:
+        s3 = boto3.client("s3")
+    except Exception as e:
+        st.error(f"Could not initialize S3 client. Check AWS credentials setup: {e}")
+        return pd.DataFrame()
+        
     resp = s3.list_objects_v2(Bucket=S3_BUCKET)
 
     json_files = [
         obj["Key"] for obj in resp.get("Contents", [])
         if obj["Key"].startswith("sent_alerts_log_") and obj["Key"].endswith(".json")
     ]
+    
     if not json_files:
         st.warning("No alert files (sent_alerts_log_*.json) found in the bucket.")
         return pd.DataFrame()
@@ -36,16 +43,27 @@ def load_latest_json_from_s3():
     latest_file = sorted(json_files)[-1]
     st.info(f"Loading latest file: {latest_file}")
 
-    buf = io.BytesIO()
-    s3.download_fileobj(S3_BUCKET, latest_file, buf)
+    try:
+        buf = io.BytesIO()
+        s3.download_fileobj(S3_BUCKET, latest_file, buf)
+    except Exception as e:
+        st.error(f"Error downloading file {latest_file}: {e}")
+        return pd.DataFrame()
+
 
     if buf.getbuffer().nbytes == 0:
         st.warning(f"File '{latest_file}' is empty. No alerts recorded yet.")
         return pd.DataFrame()
         
     buf.seek(0)
-    # The JSON data is an array of objects, which is correctly read by pd.read_json(buf)
-    return pd.read_json(buf)
+    
+    try:
+        # The JSON data is expected to be an array of objects
+        return pd.read_json(buf)
+    except Exception as e:
+        st.error(f"Error reading JSON from S3 file: {e}")
+        return pd.DataFrame()
+
 
 # --- MAIN APP LOGIC ---
 try:
@@ -53,6 +71,8 @@ try:
     
     if df.empty:
         st.success("✅ Data loaded. No new alerts found in the latest file.")
+        # If the dataframe is empty due to warnings in the loader, we just display the success
+        # message and stop execution to prevent errors below.
         st.stop() 
 
     # --- VALIDATE COLUMNS ---
@@ -121,7 +141,6 @@ try:
         df_filtered['Symbol'] = DEFAULT_EXCHANGE + ":" + df_filtered['Cleaned_Name']
         
         # 4. Generate the link using the corrected 'Symbol'
-        #    This is the same line as before [cite: 18]
         df_filtered['TradingView'] = "https://www.tradingview.com/chart/?symbol=" + df_filtered['Symbol'] + "&interval=5"
 
         st.success(f"Displaying {len(df_filtered)} of {len(df)} total alerts.")
@@ -131,7 +150,7 @@ try:
             "Time": st.column_config.TextColumn("Time"),
             "TradingView": st.column_config.LinkColumn(
                 "TradingView",
-                display_text="Open 5m Chart 📈" # [cite: 20]
+                display_text="Open 5m Chart 📈" 
             ),
             # Hide the helper columns we created
             "Symbol": None, 
@@ -139,7 +158,7 @@ try:
         }
 
     else:
-        st.warning("⚠️ 'Name' column not found. Cannot generate TradingView links.") [cite: 18, 19]
+        st.warning("⚠️ 'Name' column not found. Cannot generate TradingView links.")
         st.success(f"Displaying {len(df_filtered)} of {len(df)} total alerts.")
 
     
@@ -151,8 +170,7 @@ try:
         # Apply the column config
         column_config=column_config
     )
-    )
     
 except Exception as e:
     st.error(f"❌ An unexpected error occurred: {e}")
-    st.stop()s
+    st.stop()
