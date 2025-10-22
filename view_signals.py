@@ -6,11 +6,10 @@ import json
 
 # --- CONFIG ---
 S3_BUCKET = "jtscanner"
-DEFAULT_EXCHANGE = "NSE"  # Change if using BSE, NASDAQ, etc.
-
+DEFAULT_EXCHANGE = "NSE"
 REQUIRED_COLUMNS = ['Name', 'Date', 'Time', 'Signal', 'BrokenLevel', 'LevelValue', 'SignalPrice']
 
-# === UPDATED TRADINGVIEW MAPPING (Your Latest List) ===
+# === UPDATED TRADINGVIEW MAPPING ===
 TICKER_CORRECTIONS = {
     "PATANJALI FOODS LIMITED": "PATANJALI",
     "INDUSIND BANK LIMITED": "INDUSINDBK",
@@ -232,16 +231,15 @@ st.title("📊 Stock Scanner Dashboard")
 def load_latest_json_from_s3():
     try:
         s3 = boto3.client("s3")
+        resp = s3.list_objects_v2(Bucket=S3_BUCKET)
     except Exception as e:
         st.error(f"Could not init S3 client: {e}")
         return pd.DataFrame()
 
-    resp = s3.list_objects_v2(Bucket=S3_BUCKET)
     json_files = [
         obj["Key"] for obj in resp.get("Contents", [])
         if obj["Key"].startswith("sent_alerts_log_") and obj["Key"].endswith(".json")
     ]
-
     if not json_files:
         st.warning("No alert JSON files found.")
         return pd.DataFrame()
@@ -250,7 +248,6 @@ def load_latest_json_from_s3():
     st.info(f"Loading latest file: {latest_file}")
     buf = io.BytesIO()
     s3.download_fileobj(S3_BUCKET, latest_file, buf)
-
     buf.seek(0)
     try:
         return pd.read_json(buf)
@@ -265,7 +262,7 @@ try:
         st.success("✅ No alerts found.")
         st.stop()
 
-    # Filter UI
+    # Sidebar filters
     st.sidebar.header("Filter Alerts")
     signals = df['Signal'].unique().tolist()
     selected_signals = st.sidebar.multiselect('Signal', signals, default=signals)
@@ -275,7 +272,7 @@ try:
     df_filtered = df[(df['Signal'].isin(selected_signals)) &
                      (df['BrokenLevel'].isin(selected_levels))].copy()
 
-    # Add TradingView column
+    # Add TradingView link
     if 'Name' in df_filtered.columns:
         df_filtered['Cleaned_Name'] = df_filtered['Name'].replace(TICKER_CORRECTIONS)
         df_filtered['Symbol'] = DEFAULT_EXCHANGE + ":" + df_filtered['Cleaned_Name']
@@ -283,9 +280,18 @@ try:
             "https://www.tradingview.com/chart/?symbol=" + df_filtered['Symbol'] + "&interval=5"
         )
 
+        # Hide InstrumentKey and reorder columns
+        if 'InstrumentKey' in df_filtered.columns:
+            df_filtered.drop(columns=['InstrumentKey'], inplace=True)
+
+        # Move TradingView link to first column
+        columns = ['TradingView'] + [c for c in df_filtered.columns if c != 'TradingView']
+        df_filtered = df_filtered[columns]
+
         column_config = {
             "TradingView": st.column_config.LinkColumn("TradingView", display_text="📈 Open 5m Chart"),
-            "Symbol": None, "Cleaned_Name": None
+            "Symbol": None,
+            "Cleaned_Name": None
         }
 
         st.success(f"Displaying {len(df_filtered)} of {len(df)} total alerts.")
@@ -297,4 +303,3 @@ try:
 except Exception as e:
     st.error(f"Unexpected error: {e}")
     st.stop()
-
