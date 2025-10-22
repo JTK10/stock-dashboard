@@ -7,11 +7,9 @@ import json
 # --- CONFIG ---
 S3_BUCKET = "jtscanner"
 
-# --- NEW: Added default exchange ---
 # ASSUMPTION: All symbols are from this exchange. Change if needed.
 # Examples: "NSE", "BSE", "NASDAQ", "NYSE"
 DEFAULT_EXCHANGE = "NSE" 
-# --- END NEW ---
 
 # Update REQUIRED_COLUMNS to reflect the actual column names in your JSON
 REQUIRED_COLUMNS = ['Name', 'Date', 'Time', 'Signal', 'BrokenLevel', 'LevelValue', 'SignalPrice']
@@ -96,21 +94,24 @@ try:
     df_filtered = df[
         (df['Signal'].isin(selected_signals)) &
         (df['BrokenLevel'].isin(selected_levels))
-    ].copy() # --- NEW: Added .copy() to avoid a potential SettingWithCopyWarning
+    ].copy() 
 
     # --------------------------------
     # --- FILTER IMPLEMENTATION END ---
     # --------------------------------
 
-    # --- NEW: Add TradingView Link Column ---
+    # --- Add TradingView Link Column ---
     if 'Name' in df_filtered.columns:
         # Create the full symbol (e.g., "NSE:RELIANCE")
         df_filtered['Symbol'] = DEFAULT_EXCHANGE + ":" + df_filtered['Name']
-        # Create the URL
-        df_filtered['TradingView'] = "https://www.tradingview.com/chart/?symbol=" + df_filtered['Symbol']
+        
+        # --- THIS IS THE MODIFIED LINE ---
+        # We add "&interval=5" to the end of the URL
+        df_filtered['TradingView'] = "https://www.tradingview.com/chart/?symbol=" + df_filtered['Symbol'] + "&interval=5"
+        # --- END MODIFICATION ---
+
     else:
         st.warning("⚠️ 'Name' column not found. Cannot generate TradingView links.")
-    # --- END NEW ---
 
     st.success(f"Displaying {len(df_filtered)} of {len(df)} total alerts.")
     
@@ -119,17 +120,16 @@ try:
         df_filtered, 
         use_container_width=True,
         disabled=True, 
-        # --- NEW: Updated column_config for TradingView link ---
+        # Configure columns, including the link
         column_config={
             "Time": st.column_config.TextColumn("Time"),
             "TradingView": st.column_config.LinkColumn(
                 "TradingView",             # Column header
-                display_text="Open Chart 📈" # Text shown in the link cell
+                display_text="Open 5m Chart 📈" # Updated link text
             ),
             # Optional: Hide the helper 'Symbol' column we created
             "Symbol": None, 
         }
-        # --- END NEW ---
     )
     
 except Exception as e:
