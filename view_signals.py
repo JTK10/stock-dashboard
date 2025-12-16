@@ -6,11 +6,10 @@ import json
 import os
 
 # --- CONFIG ---
-# Use environment variable if available, otherwise default
 S3_BUCKET = os.getenv("S3_BUCKET_NAME", "jtscanner") 
 DEFAULT_EXCHANGE = "NSE"
 
-# === UPDATED TRADINGVIEW MAPPING (From your list) ===
+# === UPDATED TRADINGVIEW MAPPING ===
 TICKER_CORRECTIONS = {
     "PATANJALI FOODS LIMITED": "PATANJALI",
     "INDUSIND BANK LIMITED": "INDUSINDBK",
@@ -224,15 +223,14 @@ TICKER_CORRECTIONS = {
 }
 
 # --- STREAMLIT PAGE ---
-st.set_page_config(page_title="Golden Scanner Dashboard", layout="wide", page_icon="⚡")
-st.title("⚡ Golden Momentum Scanner Dashboard")
+st.set_page_config(page_title="Scanner Dashboard", layout="wide", page_icon="⚡")
+st.title("⚡ Scanner Dashboard")
 
 # --- LOAD JSON FROM S3 ---
 @st.cache_data(ttl=300)
 def load_latest_json_from_s3():
     """
     Fetches the latest JSON log from S3 and standardizes columns for Hybrid Compatibility.
-    Supports both Old Scanner (BrokenLevel) and New Scanner (Golden Momentum).
     """
     try:
         s3 = boto3.client("s3")
@@ -241,7 +239,6 @@ def load_latest_json_from_s3():
         st.error(f"Could not init S3 client. Check credentials. Error: {e}")
         return pd.DataFrame()
 
-    # Find alert log files
     contents = resp.get("Contents", [])
     if not contents:
         st.warning("Bucket is empty or not accessible.")
@@ -256,12 +253,10 @@ def load_latest_json_from_s3():
         st.warning("No 'sent_alerts_log_' JSON files found in bucket.")
         return pd.DataFrame()
 
-    # Get the absolute latest file by timestamp/name
     latest_file = sorted(json_files)[-1]
     file_date = latest_file.replace("sent_alerts_log_", "").replace(".json", "")
     st.info(f"📅 Displaying Alerts for: **{file_date}** (File: `{latest_file}`)")
 
-    # Read File
     buf = io.BytesIO()
     try:
         s3.download_fileobj(S3_BUCKET, latest_file, buf)
@@ -275,27 +270,27 @@ def load_latest_json_from_s3():
         return df
 
     # === HYBRID COMPATIBILITY LAYER ===
-    # This block ensures New Scanner Data looks like Old Scanner Data where needed
     
-    # 1. Map 'Price' (New) to 'SignalPrice' (Old/UI expected)
+    # 1. Map 'Price' -> 'SignalPrice' if needed
     if 'Price' in df.columns and 'SignalPrice' not in df.columns:
         df.rename(columns={'Price': 'SignalPrice'}, inplace=True)
         
-    # 2. Map 'BrokenLevel' (Used in Filters)
-    # The new scanner uses VWAP/PDH implicitly. We map Signal -> Level name.
-    if 'BrokenLevel' not in df.columns:
-        if 'Signal' in df.columns:
-            df['BrokenLevel'] = df['Signal'].map({'LONG': 'PDH Breakout', 'SHORT': 'PDL Breakdown'})
-        else:
-            df['BrokenLevel'] = 'N/A'
-            
-    # 3. Handle 'LevelValue' (Optional display)
-    if 'LevelValue' not in df.columns:
-        # For new scanner, we might want to show VWAP or leaving it blank is fine
-        if 'VWAP' in df.columns:
-             df['LevelValue'] = df['VWAP'] # Proxy VWAP as the reference level
-        else:
-             df['LevelValue'] = 0.0
+    # 2. Map 'Side' (Bullish/Bearish) -> 'Direction'
+    if 'Side' in df.columns:
+        df['Direction'] = df['Side'].map({'Bullish': '🟢 Long', 'Bearish': '🔴 Short'})
+    elif 'Signal' in df.columns:
+        # Fallback for old scanner data
+        df['Direction'] = df['Signal'].map({'LONG': '🟢 Long', 'SHORT': '🔴 Short'})
+        
+    # 3. Create 'Setup' column (combines Signal type + metrics)
+    if 'Signal' in df.columns:
+        df['Setup'] = df['Signal']
+        
+    # 4. Ensure metrics exist (fill 0 if missing for older logs)
+    cols_to_ensure = ['NoiseRatio', 'RangeSoFarPct', 'GreenRatio', 'RedRatio', 'NetMovePct']
+    for c in cols_to_ensure:
+        if c not in df.columns:
+            df[c] = 0.0
 
     return df
 
@@ -310,26 +305,17 @@ try:
     # --- Sidebar Filters ---
     st.sidebar.header("🔍 Filter Alerts")
     
-    # Signal Filter
-    if 'Signal' in df.columns:
-        signals = sorted(df['Signal'].astype(str).unique().tolist())
-        selected_signals = st.sidebar.multiselect('Signal Type', signals, default=signals)
+    # Direction Filter
+    if 'Direction' in df.columns:
+        directions = sorted(df['Direction'].astype(str).unique().tolist())
+        selected_dirs = st.sidebar.multiselect('Direction', directions, default=directions)
     else:
-        selected_signals = []
+        selected_dirs = []
         
-    # Level Filter
-    if 'BrokenLevel' in df.columns:
-        levels = sorted(df['BrokenLevel'].astype(str).unique().tolist())
-        selected_levels = st.sidebar.multiselect('Setup Type', levels, default=levels)
-    else:
-        selected_levels = []
-
     # Apply Filters
     mask = pd.Series(True, index=df.index)
-    if 'Signal' in df.columns:
-        mask &= df['Signal'].isin(selected_signals)
-    if 'BrokenLevel' in df.columns:
-        mask &= df['BrokenLevel'].isin(selected_levels)
+    if 'Direction' in df.columns:
+        mask &= df['Direction'].isin(selected_dirs)
         
     df_filtered = df[mask].copy()
 
@@ -337,35 +323,24 @@ try:
     
     # 1. TradingView Link Generation
     if 'Name' in df_filtered.columns:
-        # Use the Mapping Dictionary to get clean ticker
         df_filtered['Cleaned_Name'] = df_filtered['Name'].replace(TICKER_CORRECTIONS)
-        
-        # Create Symbol column for URL
         df_filtered['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df_filtered['Cleaned_Name'].str.replace(' ', '')
-        
-        # Generate URL
         df_filtered['Chart'] = (
             "https://www.tradingview.com/chart/?symbol=" + df_filtered['TV_Symbol'] + "&interval=5"
         )
     else:
         st.error("Column 'Name' missing. Cannot generate charts.")
 
-    # 2. Column Selection & Ordering
-    # We want a clean view. We prefer New Scanner columns if available.
-    
+    # 2. Column Selection - UPDATED for Two-Quiet Strategy
     desired_order = [
-        'Chart', 'Name', 'Time', 'Signal', 'SignalPrice', 
-        'OIChgPct', 'MomentumPct', 'VWAP', # New Scanner Columns
-        'BrokenLevel', 'LevelValue'        # Old/Hybrid Columns
+        'Chart', 'Name', 'Time', 'Direction', 'SignalPrice', 
+        'NetMovePct', 'RangeSoFarPct', 
+        'NoiseRatio', 'GreenRatio', 'RedRatio', # New Quality Metrics
+        'Prev1RangePct', 'Prev2RangePct' # Quiet Day Metrics
     ]
     
-    # Filter only columns that actually exist in this dataframe
+    # Filter only columns that actually exist
     final_cols = [c for c in desired_order if c in df_filtered.columns]
-    
-    # Add any extra columns at the end (debugging)
-    # remaining_cols = [c for c in df_filtered.columns if c not in final_cols and c not in ['InstrumentKey', 'Symbol', 'Cleaned_Name', 'TV_Symbol']]
-    # final_cols.extend(remaining_cols)
-
     df_display = df_filtered[final_cols]
 
     # --- Display ---
@@ -375,10 +350,13 @@ try:
     column_config = {
         "Chart": st.column_config.LinkColumn("TradingView", display_text="📈 Open Chart"),
         "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
-        "VWAP": st.column_config.NumberColumn("VWAP", format="%.2f"),
-        "OIChgPct": st.column_config.NumberColumn("OI Chg %", format="%.2f%%"),
-        "MomentumPct": st.column_config.NumberColumn("Mom %", format="%.2f%%"),
-        "LevelValue": st.column_config.NumberColumn("Ref Lvl", format="%.2f"),
+        "NetMovePct": st.column_config.NumberColumn("Net Move %", format="%.2f%%"),
+        "RangeSoFarPct": st.column_config.NumberColumn("Day Range %", format="%.2f%%"),
+        "NoiseRatio": st.column_config.NumberColumn("Noise Ratio", format="%.2f", help="Lower is better (cleaner move)"),
+        "GreenRatio": st.column_config.NumberColumn("Green Candle %", format="%.2f"),
+        "RedRatio": st.column_config.NumberColumn("Red Candle %", format="%.2f"),
+        "Prev1RangePct": st.column_config.NumberColumn("D-1 Range", format="%.2f%%"),
+        "Prev2RangePct": st.column_config.NumberColumn("D-2 Range", format="%.2f%%"),
     }
 
     st.data_editor(
@@ -391,5 +369,4 @@ try:
 
 except Exception as e:
     st.error(f"Unexpected error in dashboard: {e}")
-    # st.exception(e) # Uncomment for debugging
     st.stop()
