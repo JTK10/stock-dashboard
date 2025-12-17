@@ -287,7 +287,8 @@ def load_latest_json_from_s3():
         df['Setup'] = df['Signal']
         
     # 4. Ensure metrics exist (fill 0 if missing for older logs)
-    cols_to_ensure = ['NoiseRatio', 'RangeSoFarPct', 'GreenRatio', 'RedRatio', 'NetMovePct']
+    # ADDED RVOL TO THIS LIST
+    cols_to_ensure = ['NoiseRatio', 'RangeSoFarPct', 'GreenRatio', 'RedRatio', 'NetMovePct', 'RVOL']
     for c in cols_to_ensure:
         if c not in df.columns:
             df[c] = 0.0
@@ -331,9 +332,10 @@ try:
     else:
         st.error("Column 'Name' missing. Cannot generate charts.")
 
-    # 2. Column Selection - UPDATED for Two-Quiet Strategy
+    # 2. Column Selection - UPDATED for Two-Quiet Strategy + RVOL
     desired_order = [
         'Chart', 'Name', 'Time', 'Direction', 'SignalPrice', 
+        'RVOL',             # <--- ADDED RVOL
         'NetMovePct', 'RangeSoFarPct', 
         'NoiseRatio', 'GreenRatio', 'RedRatio', # New Quality Metrics
         'Prev1RangePct', 'Prev2RangePct' # Quiet Day Metrics
@@ -350,16 +352,19 @@ try:
     column_config = {
         "Chart": st.column_config.LinkColumn("TradingView", display_text="📈 Open Chart"),
         "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
-        "RVOL": st.column_config.NumberColumn("D-2 Range", format="%.2f%%"),
+        
+        # --- FIXED RVOL CONFIGURATION ---
+        "RVOL": st.column_config.NumberColumn("RVOL", format="%.2fx"),
+        
         "NetMovePct": st.column_config.NumberColumn("Net Move %", format="%.2f%%"),
         "RangeSoFarPct": st.column_config.NumberColumn("Day Range %", format="%.2f%%"),
         "NoiseRatio": st.column_config.NumberColumn("Noise Ratio", format="%.2f", help="Lower is better (cleaner move)"),
         "GreenRatio": st.column_config.NumberColumn("Green Candle %", format="%.2f"),
         "RedRatio": st.column_config.NumberColumn("Red Candle %", format="%.2f"),
         "Prev1RangePct": st.column_config.NumberColumn("D-1 Range", format="%.2f%%"),
-        "Prev2RangePct": st.column_config.NumberColumn("RVOL", format="%.2f%%")
-    
         
+        # --- FIXED PREV2 LABEL ---
+        "Prev2RangePct": st.column_config.NumberColumn("D-2 Range", format="%.2f%%")
     }
 
     st.data_editor(
@@ -373,5 +378,3 @@ try:
 except Exception as e:
     st.error(f"Unexpected error in dashboard: {e}")
     st.stop()
-
-
