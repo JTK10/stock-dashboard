@@ -8,10 +8,12 @@ from datetime import datetime, timedelta
 import pytz
 
 # --- CONFIG ---
+# FIX: Added Region configuration here
+AWS_REGION = os.getenv("AWS_REGION", "ap-south-1") 
 DYNAMODB_TABLE = os.getenv("DYNAMODB_TABLE", "SentAlerts")
 DEFAULT_EXCHANGE = "NSE"
 
-# === UPDATED TRADINGVIEW MAPPING ===
+# === TRADINGVIEW MAPPING ===
 TICKER_CORRECTIONS = {
     "PATANJALI FOODS LIMITED": "PATANJALI",
     "INDUSIND BANK LIMITED": "INDUSINDBK",
@@ -231,22 +233,21 @@ st.title("⚡ Scanner Dashboard (DynamoDB)")
 # --- DATE SELECTION ---
 col1, col2 = st.columns([1, 4])
 with col1:
-    # Default to current time in India
     india_tz = pytz.timezone('Asia/Kolkata')
     today_india = datetime.now(india_tz).date()
     selected_date = st.date_input("Select Date", today_india)
 
 # --- LOAD DATA FROM DYNAMODB ---
-@st.cache_data(ttl=60)  # Cache for 60 seconds
+@st.cache_data(ttl=60)
 def load_data_from_dynamodb(target_date):
     """
     Scans the DynamoDB table for items matching the selected date.
     """
     try:
-        dynamodb = boto3.resource("dynamodb")
+        # FIX: Explicitly passing region_name here
+        dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
         table = dynamodb.Table(DYNAMODB_TABLE)
         
-        # We assume the 'Date' field exists in Items as YYYY-MM-DD
         target_date_str = target_date.isoformat()
         
         response = table.scan(
@@ -254,7 +255,6 @@ def load_data_from_dynamodb(target_date):
         )
         items = response.get('Items', [])
         
-        # Handle Pagination if user has huge number of alerts per day
         while 'LastEvaluatedKey' in response:
             response = table.scan(
                 FilterExpression=Attr("Date").eq(target_date_str),
@@ -269,7 +269,6 @@ def load_data_from_dynamodb(target_date):
     if not items:
         return pd.DataFrame()
 
-    # Convert DynamoDB Decimals to floats for Pandas
     def convert_decimal(obj):
         if isinstance(obj, list):
             return [convert_decimal(i) for i in obj]
@@ -282,29 +281,24 @@ def load_data_from_dynamodb(target_date):
     data = [convert_decimal(item) for item in items]
     df = pd.DataFrame(data)
 
-    # === HYBRID COMPATIBILITY LAYER ===
+    # === DATA PROCESSING ===
     
-    # 1. Map 'Price' -> 'SignalPrice' if needed
     if 'Price' in df.columns and 'SignalPrice' not in df.columns:
         df.rename(columns={'Price': 'SignalPrice'}, inplace=True)
         
-    # 2. Map 'Side' (Bullish/Bearish) -> 'Direction'
     if 'Side' in df.columns:
         df['Direction'] = df['Side'].map({'Bullish': '🟢 Long', 'Bearish': '🔴 Short'})
     elif 'Signal' in df.columns:
         df['Direction'] = df['Signal'].map({'LONG': '🟢 Long', 'SHORT': '🔴 Short'})
         
-    # 3. Create 'Setup' column
     if 'Signal' in df.columns:
         df['Setup'] = df['Signal']
         
-    # 4. Ensure metrics exist (fill 0 if missing from DB item)
     cols_to_ensure = ['NoiseRatio', 'RangeSoFarPct', 'GreenRatio', 'RedRatio', 'NetMovePct', 'RVOL', 'Prev1RangePct', 'Prev2RangePct']
     for c in cols_to_ensure:
         if c not in df.columns:
             df[c] = 0.0
             
-    # 5. Fix numeric types (in case they were stored as strings in DB)
     numeric_cols = ['SignalPrice', 'RVOL', 'NetMovePct', 'RangeSoFarPct', 'NoiseRatio', 'GreenRatio', 'RedRatio', 'Prev1RangePct', 'Prev2RangePct']
     for col in numeric_cols:
         if col in df.columns:
@@ -323,14 +317,12 @@ try:
     # --- Sidebar Filters ---
     st.sidebar.header("🔍 Filter Alerts")
     
-    # Direction Filter
     if 'Direction' in df.columns:
         directions = sorted(df['Direction'].astype(str).unique().tolist())
         selected_dirs = st.sidebar.multiselect('Direction', directions, default=directions)
     else:
         selected_dirs = []
         
-    # Apply Filters
     mask = pd.Series(True, index=df.index)
     if 'Direction' in df.columns:
         mask &= df['Direction'].isin(selected_dirs)
@@ -339,7 +331,6 @@ try:
 
     # --- Data Presentation ---
     
-    # 1. TradingView Link Generation
     if 'Name' in df_filtered.columns:
         df_filtered['Cleaned_Name'] = df_filtered['Name'].replace(TICKER_CORRECTIONS)
         df_filtered['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df_filtered['Cleaned_Name'].str.replace(' ', '')
@@ -347,40 +338,31 @@ try:
             "https://www.tradingview.com/chart/?symbol=" + df_filtered['TV_Symbol'] + "&interval=5"
         )
     else:
-        st.error("Column 'Name' missing in DB items. Cannot generate charts.")
+        st.error("Column 'Name' missing. Cannot generate charts.")
 
-    # 2. Column Selection - UPDATED for Two-Quiet Strategy + RVOL
     desired_order = [
         'Chart', 'Name', 'Time', 'Direction', 'SignalPrice', 
-        'RVOL',             # <--- ADDED RVOL
+        'RVOL',
         'NetMovePct', 'RangeSoFarPct', 
-        'NoiseRatio', 'GreenRatio', 'RedRatio', # New Quality Metrics
-        'Prev1RangePct', 'Prev2RangePct' # Quiet Day Metrics
+        'NoiseRatio', 'GreenRatio', 'RedRatio',
+        'Prev1RangePct', 'Prev2RangePct'
     ]
     
-    # Filter only columns that actually exist
     final_cols = [c for c in desired_order if c in df_filtered.columns]
     df_display = df_filtered[final_cols]
 
-    # --- Display ---
     st.metric(label="Total Alerts", value=len(df_display))
     
-    # Configure Columns
     column_config = {
         "Chart": st.column_config.LinkColumn("TradingView", display_text="📈 Open Chart"),
         "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
-        
-        # --- FIXED RVOL CONFIGURATION ---
         "RVOL": st.column_config.NumberColumn("RVOL", format="%.2fx"),
-        
         "NetMovePct": st.column_config.NumberColumn("Net Move %", format="%.2f%%"),
         "RangeSoFarPct": st.column_config.NumberColumn("Day Range %", format="%.2f%%"),
         "NoiseRatio": st.column_config.NumberColumn("Noise Ratio", format="%.2f", help="Lower is better (cleaner move)"),
         "GreenRatio": st.column_config.NumberColumn("Green Candle %", format="%.2f"),
         "RedRatio": st.column_config.NumberColumn("Red Candle %", format="%.2f"),
         "Prev1RangePct": st.column_config.NumberColumn("D-1 Range", format="%.2f%%"),
-        
-        # --- FIXED PREV2 LABEL ---
         "Prev2RangePct": st.column_config.NumberColumn("D-2 Range", format="%.2f%%")
     }
 
