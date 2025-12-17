@@ -1,12 +1,14 @@
 import streamlit as st
 import pandas as pd
 import boto3
-import io
-import json
+from boto3.dynamodb.conditions import Attr
 import os
+from decimal import Decimal
+from datetime import datetime, timedelta
+import pytz
 
 # --- CONFIG ---
-S3_BUCKET = os.getenv("S3_BUCKET_NAME", "jtscanner") 
+DYNAMODB_TABLE = os.getenv("DYNAMODB_TABLE", "SentAlerts")
 DEFAULT_EXCHANGE = "NSE"
 
 # === UPDATED TRADINGVIEW MAPPING ===
@@ -224,50 +226,61 @@ TICKER_CORRECTIONS = {
 
 # --- STREAMLIT PAGE ---
 st.set_page_config(page_title="Scanner Dashboard", layout="wide", page_icon="⚡")
-st.title("⚡ Scanner Dashboard")
+st.title("⚡ Scanner Dashboard (DynamoDB)")
 
-# --- LOAD JSON FROM S3 ---
-@st.cache_data(ttl=300)
-def load_latest_json_from_s3():
+# --- DATE SELECTION ---
+col1, col2 = st.columns([1, 4])
+with col1:
+    # Default to current time in India
+    india_tz = pytz.timezone('Asia/Kolkata')
+    today_india = datetime.now(india_tz).date()
+    selected_date = st.date_input("Select Date", today_india)
+
+# --- LOAD DATA FROM DYNAMODB ---
+@st.cache_data(ttl=60)  # Cache for 60 seconds
+def load_data_from_dynamodb(target_date):
     """
-    Fetches the latest JSON log from S3 and standardizes columns for Hybrid Compatibility.
+    Scans the DynamoDB table for items matching the selected date.
     """
     try:
-        s3 = boto3.client("s3")
-        resp = s3.list_objects_v2(Bucket=S3_BUCKET)
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(DYNAMODB_TABLE)
+        
+        # We assume the 'Date' field exists in Items as YYYY-MM-DD
+        target_date_str = target_date.isoformat()
+        
+        response = table.scan(
+            FilterExpression=Attr("Date").eq(target_date_str)
+        )
+        items = response.get('Items', [])
+        
+        # Handle Pagination if user has huge number of alerts per day
+        while 'LastEvaluatedKey' in response:
+            response = table.scan(
+                FilterExpression=Attr("Date").eq(target_date_str),
+                ExclusiveStartKey=response['LastEvaluatedKey']
+            )
+            items.extend(response.get('Items', []))
+            
     except Exception as e:
-        st.error(f"Could not init S3 client. Check credentials. Error: {e}")
+        st.error(f"Error querying DynamoDB: {e}")
         return pd.DataFrame()
 
-    contents = resp.get("Contents", [])
-    if not contents:
-        st.warning("Bucket is empty or not accessible.")
+    if not items:
         return pd.DataFrame()
 
-    json_files = [
-        obj["Key"] for obj in contents
-        if "sent_alerts_log_" in obj["Key"] and obj["Key"].endswith(".json")
-    ]
-    
-    if not json_files:
-        st.warning("No 'sent_alerts_log_' JSON files found in bucket.")
-        return pd.DataFrame()
+    # Convert DynamoDB Decimals to floats for Pandas
+    def convert_decimal(obj):
+        if isinstance(obj, list):
+            return [convert_decimal(i) for i in obj]
+        elif isinstance(obj, dict):
+            return {k: convert_decimal(v) for k, v in obj.items()}
+        elif isinstance(obj, Decimal):
+            return float(obj)
+        return obj
 
-    latest_file = sorted(json_files)[-1]
-    file_date = latest_file.replace("sent_alerts_log_", "").replace(".json", "")
-    st.info(f"📅 Displaying Alerts for: **{file_date}** (File: `{latest_file}`)")
-
-    buf = io.BytesIO()
-    try:
-        s3.download_fileobj(S3_BUCKET, latest_file, buf)
-        buf.seek(0)
-        df = pd.read_json(buf)
-    except Exception as e:
-        st.error(f"Error reading JSON file: {e}")
-        return pd.DataFrame()
-
-    if df.empty:
-        return df
+    data = [convert_decimal(item) for item in items]
+    df = pd.DataFrame(data)
 
     # === HYBRID COMPATIBILITY LAYER ===
     
@@ -279,28 +292,32 @@ def load_latest_json_from_s3():
     if 'Side' in df.columns:
         df['Direction'] = df['Side'].map({'Bullish': '🟢 Long', 'Bearish': '🔴 Short'})
     elif 'Signal' in df.columns:
-        # Fallback for old scanner data
         df['Direction'] = df['Signal'].map({'LONG': '🟢 Long', 'SHORT': '🔴 Short'})
         
-    # 3. Create 'Setup' column (combines Signal type + metrics)
+    # 3. Create 'Setup' column
     if 'Signal' in df.columns:
         df['Setup'] = df['Signal']
         
-    # 4. Ensure metrics exist (fill 0 if missing for older logs)
-    # ADDED RVOL TO THIS LIST
-    cols_to_ensure = ['NoiseRatio', 'RangeSoFarPct', 'GreenRatio', 'RedRatio', 'NetMovePct', 'RVOL']
+    # 4. Ensure metrics exist (fill 0 if missing from DB item)
+    cols_to_ensure = ['NoiseRatio', 'RangeSoFarPct', 'GreenRatio', 'RedRatio', 'NetMovePct', 'RVOL', 'Prev1RangePct', 'Prev2RangePct']
     for c in cols_to_ensure:
         if c not in df.columns:
             df[c] = 0.0
+            
+    # 5. Fix numeric types (in case they were stored as strings in DB)
+    numeric_cols = ['SignalPrice', 'RVOL', 'NetMovePct', 'RangeSoFarPct', 'NoiseRatio', 'GreenRatio', 'RedRatio', 'Prev1RangePct', 'Prev2RangePct']
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
 
     return df
 
 # --- MAIN APP ---
 try:
-    df = load_latest_json_from_s3()
+    df = load_data_from_dynamodb(selected_date)
     
     if df.empty:
-        st.warning("⚠️ No alerts found in the loaded file.")
+        st.warning(f"⚠️ No alerts found for {selected_date}.")
         st.stop()
 
     # --- Sidebar Filters ---
@@ -330,7 +347,7 @@ try:
             "https://www.tradingview.com/chart/?symbol=" + df_filtered['TV_Symbol'] + "&interval=5"
         )
     else:
-        st.error("Column 'Name' missing. Cannot generate charts.")
+        st.error("Column 'Name' missing in DB items. Cannot generate charts.")
 
     # 2. Column Selection - UPDATED for Two-Quiet Strategy + RVOL
     desired_order = [
