@@ -356,7 +356,9 @@ try:
         "GreenRatio": st.column_config.NumberColumn("Green Candle %", format="%.2f"),
         "RedRatio": st.column_config.NumberColumn("Red Candle %", format="%.2f"),
         "Prev1RangePct": st.column_config.NumberColumn("D-1 Range", format="%.2f%%"),
-        "Prev2RangePct": st.column_config.NumberColumn("D-2 Range", format="%.2f%%"),
+        "Prev2RangePct": st.column_config.NumberColumn("RVOL", format="%.2f%%"),
+        "RVOL": st.column_config.NumberColumn("D-2 Range", format="%.2f%%")
+        
     }
 
     st.data_editor(
@@ -370,3 +372,4 @@ try:
 except Exception as e:
     st.error(f"Unexpected error in dashboard: {e}")
     st.stop()
+
