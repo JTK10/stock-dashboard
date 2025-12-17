@@ -350,14 +350,15 @@ try:
     column_config = {
         "Chart": st.column_config.LinkColumn("TradingView", display_text="📈 Open Chart"),
         "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
+        "RVOL": st.column_config.NumberColumn("D-2 Range", format="%.2f%%"),
         "NetMovePct": st.column_config.NumberColumn("Net Move %", format="%.2f%%"),
         "RangeSoFarPct": st.column_config.NumberColumn("Day Range %", format="%.2f%%"),
         "NoiseRatio": st.column_config.NumberColumn("Noise Ratio", format="%.2f", help="Lower is better (cleaner move)"),
         "GreenRatio": st.column_config.NumberColumn("Green Candle %", format="%.2f"),
         "RedRatio": st.column_config.NumberColumn("Red Candle %", format="%.2f"),
         "Prev1RangePct": st.column_config.NumberColumn("D-1 Range", format="%.2f%%"),
-        "Prev2RangePct": st.column_config.NumberColumn("RVOL", format="%.2f%%"),
-        "RVOL": st.column_config.NumberColumn("D-2 Range", format="%.2f%%")
+        "Prev2RangePct": st.column_config.NumberColumn("RVOL", format="%.2f%%")
+    
         
     }
 
@@ -372,4 +373,5 @@ try:
 except Exception as e:
     st.error(f"Unexpected error in dashboard: {e}")
     st.stop()
+
 
