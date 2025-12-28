@@ -228,7 +228,7 @@ TICKER_CORRECTIONS = {
 
 # --- STREAMLIT PAGE ---
 st.set_page_config(page_title="Scanner Dashboard", layout="wide", page_icon="⚡")
-st.title("⚡ Scanner Dashboard (DynamoDB)")
+st.title("⚡ Scanner Dashboard")
 
 # --- DATE SELECTION ---
 col1, col2 = st.columns([1, 4])
@@ -377,3 +377,4 @@ try:
 except Exception as e:
     st.error(f"Unexpected error in dashboard: {e}")
     st.stop()
+
