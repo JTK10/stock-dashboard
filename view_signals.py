@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 import pytz
 
 # --- CONFIG ---
-# FIX: Added Region configuration here
 AWS_REGION = os.getenv("AWS_REGION", "ap-south-1") 
 DYNAMODB_TABLE = os.getenv("DYNAMODB_TABLE", "SentAlerts")
 DEFAULT_EXCHANGE = "NSE"
@@ -244,7 +243,6 @@ def load_data_from_dynamodb(target_date):
     Scans the DynamoDB table for items matching the selected date.
     """
     try:
-        # FIX: Explicitly passing region_name here
         dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
         table = dynamodb.Table(DYNAMODB_TABLE)
         
@@ -294,12 +292,23 @@ def load_data_from_dynamodb(target_date):
     if 'Signal' in df.columns:
         df['Setup'] = df['Signal']
         
-    cols_to_ensure = ['NoiseRatio', 'RangeSoFarPct', 'GreenRatio', 'RedRatio', 'NetMovePct', 'RVOL', 'Prev1RangePct', 'Prev2RangePct']
+    # FIX: Added 'TargetPrice' and 'TargetPct' to cols_to_ensure
+    cols_to_ensure = [
+        'TargetPrice', 'TargetPct', 
+        'NoiseRatio', 'RangeSoFarPct', 'GreenRatio', 'RedRatio', 
+        'NetMovePct', 'RVOL', 'Prev1RangePct', 'Prev2RangePct'
+    ]
     for c in cols_to_ensure:
         if c not in df.columns:
             df[c] = 0.0
             
-    numeric_cols = ['SignalPrice', 'RVOL', 'NetMovePct', 'RangeSoFarPct', 'NoiseRatio', 'GreenRatio', 'RedRatio', 'Prev1RangePct', 'Prev2RangePct']
+    # FIX: Added 'TargetPrice' and 'TargetPct' to numeric_cols
+    numeric_cols = [
+        'SignalPrice', 'TargetPrice', 'TargetPct', 
+        'RVOL', 'NetMovePct', 'RangeSoFarPct', 
+        'NoiseRatio', 'GreenRatio', 'RedRatio', 
+        'Prev1RangePct', 'Prev2RangePct'
+    ]
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
@@ -340,8 +349,10 @@ try:
     else:
         st.error("Column 'Name' missing. Cannot generate charts.")
 
+    # FIX: Updated order to include TargetPrice and TargetPct after SignalPrice
     desired_order = [
         'Chart', 'Name', 'Time', 'Direction', 'SignalPrice', 
+        'TargetPrice', 'TargetPct',  # <-- Added here
         'RVOL',
         'NetMovePct', 'RangeSoFarPct', 
         'NoiseRatio', 'GreenRatio', 'RedRatio',
@@ -356,6 +367,11 @@ try:
     column_config = {
         "Chart": st.column_config.LinkColumn("TradingView", display_text="📈 Open Chart"),
         "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
+        
+        # FIX: Added configuration for new columns
+        "TargetPrice": st.column_config.NumberColumn("Target Price", format="%.2f"),
+        "TargetPct": st.column_config.NumberColumn("Target %", format="%.2f%%"),
+        
         "RVOL": st.column_config.NumberColumn("RVOL", format="%.2fx"),
         "NetMovePct": st.column_config.NumberColumn("Net Move %", format="%.2f%%"),
         "RangeSoFarPct": st.column_config.NumberColumn("Day Range %", format="%.2f%%"),
@@ -377,4 +393,3 @@ try:
 except Exception as e:
     st.error(f"Unexpected error in dashboard: {e}")
     st.stop()
-
