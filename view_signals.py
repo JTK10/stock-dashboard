@@ -424,10 +424,10 @@ if selected == "Alpha Stream":
                 column_config={
                     "Chart": st.column_config.LinkColumn("View", display_text="📈"),
                     "Live_Move_Pct": st.column_config.ProgressColumn("%", format="%.2f%%", min_value=-5, max_value=5),
-                    "TargetPrice": st.column_config.NumberColumn("Target ₹", format="%.2f"),
-                    "TargetPct": st.column_config.NumberColumn("Target %", format="%.2f%%"),
                     "Time": st.column_config.TextColumn("Entry Time"), 
                     "RVOL": st.column_config.NumberColumn("RVOL", format="%.2fx"),
+                    "TargetPct": st.column_config.NumberColumn("Target %", format="%.2f%%"),
+                    
                 },
                 hide_index=True, use_container_width=True, disabled=True, key="bull_table"
             )
@@ -447,10 +447,10 @@ if selected == "Alpha Stream":
                 column_config={
                     "Chart": st.column_config.LinkColumn("View", display_text="📉"),
                     "Live_Move_Pct": st.column_config.ProgressColumn("%", format="%.2f%%", min_value=-5, max_value=5),
-                    "TargetPrice": st.column_config.NumberColumn("Target ₹", format="%.2f"),
-                    "TargetPct": st.column_config.NumberColumn("Target %", format="%.2f%%"),
                     "Time": st.column_config.TextColumn("Entry Time"),
                     "RVOL": st.column_config.NumberColumn("RVOL", format="%.2fx"),
+                    "TargetPct": st.column_config.NumberColumn("Target %", format="%.2f%%"),
+                    
                 },
                 hide_index=True, use_container_width=True, disabled=True, key="bear_table"
             )
@@ -501,3 +501,4 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
+
