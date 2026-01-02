@@ -438,7 +438,8 @@ with st.sidebar:
         styles={
             "container": {"padding": "5!important", "background-color": "#0b0e14"},
             "nav-link": {"font-size": "16px", "text-align": "left", "margin":"0px", "--hover-color": "#1e232e"},
-            "nav-link-selected": {"background-color": "#00C9FF"},
+            "nav-link-selected": {"background-color": "#00FF7F", "color": "black"}, # Changed to Neon Green
+        }
         }
     )
     st.divider()
@@ -448,18 +449,15 @@ with st.sidebar:
 
 # 1. SignalX
 if selected == "SignalX":
-    # --- CUSTOM SVG LOGO (BULL & BEAR X) ---
-    # This replaces the previous gradient text title.
-    # It draws a rising green arrow (bull) crossing a falling red arrow (bear).
+    # --- CUSTOM SVG LOGO (FIXED) ---
+    # Removed comments and minimized indentation to prevent markdown errors
     st.markdown("""
         <div style="text-align: left; margin-bottom: 20px;">
             <svg width="350" height="80" viewBox="0 0 350 80" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M20 70 L 80 20 L 100 35 L 140 10" stroke="#00FF7F" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
                 <path d="M140 10 L 125 12 M140 10 L 135 25" stroke="#00FF7F" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-                
                 <path d="M20 10 L 60 30 L 80 20 L 140 70" stroke="#FF4B4B" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
                 <path d="M140 70 L 125 68 M140 70 L 135 55" stroke="#FF4B4B" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-                
                 <text x="160" y="55" fill="white" font-family="Inter, sans-serif" font-weight="800" font-size="48" letter-spacing="-1">SignalX</text>
             </svg>
         </div>
@@ -597,3 +595,4 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
+
