@@ -64,7 +64,7 @@ TICKER_CORRECTIONS = {
     "HINDALCO INDUSTRIES LTD": "HINDALCO",
     "HINDALCO INDUSTRIES LIMITED": "HINDALCO",
     "HINDALCO": "HINDALCO",
-    "HINDALCO  INDUSTRIES  LTD": "HINDALCO"
+    "HINDALCO  INDUSTRIES  LTD": "HINDALCO",
     # --- COMMON CORRECTIONS ---
     "PATANJALI FOODS LIMITED": "PATANJALI",
     "INDUSIND BANK LIMITED": "INDUSINDBK",
@@ -487,6 +487,7 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
+
 
 
 
