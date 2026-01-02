@@ -251,7 +251,7 @@ TICKER_CORRECTIONS = {
     "NUVAMA WEALTH MANAGE LTD": "NUVAMA",
     "MAX HEALTHCARE INS LTD": "MAXHEALTH",
     "MAZAGON DOCK SHIPBUIL LTD": "MAZDOCK",
-    "TATA CHEMICALS LTD": "TATACHEM"
+    "TATA CHEMICALS LTD": "TATACHEM",
     "HINDALCO  INDUSTRIES  LTD": "HINDALCO"
 }
 
@@ -487,6 +487,7 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
+
 
 
 
