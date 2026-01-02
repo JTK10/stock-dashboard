@@ -7,16 +7,17 @@ from decimal import Decimal
 from datetime import datetime
 import pytz
 import yfinance as yf
+import altair as alt
 from streamlit_autorefresh import st_autorefresh
-from streamlit_option_menu import option_menu  # <--- NEW LIBRARY
+from streamlit_option_menu import option_menu
 
 # --- 1. PAGE CONFIG & AUTO REFRESH ---
 st.set_page_config(page_title="Scanner Dashboard", layout="wide", page_icon="⚡")
 
-# Auto-refresh every 5 minutes (300 seconds) to get fresh prices
+# Auto-refresh every 5 minutes (300 seconds)
 count = st_autorefresh(interval=300 * 1000, key="datarefresh")
 
-# --- 2. CUSTOM CSS (FOR THE DARK CARD LOOK) ---
+# --- 2. CUSTOM CSS ---
 st.markdown("""
 <style>
     /* Card Container Style */
@@ -35,15 +36,42 @@ AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
 DYNAMODB_TABLE = os.getenv("DYNAMODB_TABLE", "SentAlerts")
 DEFAULT_EXCHANGE = "NSE"
 
-# === TRADINGVIEW MAPPING (KEPT EXACTLY AS IS) ===
+# === TRADINGVIEW MAPPING & YAHOO FIXES ===
+# This maps your DynamoDB names to Yahoo Finance Tickers
 TICKER_CORRECTIONS = {
+    # --- FIXES FOR ZERO CMP STOCKS ---
+    "LIC HOUSING FINANCE LTD": "LICHSGFIN",
+    "INOX WIND LIMITED": "INOXWIND",
+    "HINDUSTAN ZINC LIMITED": "HINDZINC",
+    "HINDUSTAN UNILEVER LTD.": "HINDUNILVR",
+    "TATA TECHNOLOGIES LIMITED": "TATATECH",
+    "SYNGENE INTERNATIONAL LTD": "SYNGENE",
+    "MARUTI SUZUKI INDIA LTD.": "MARUTI",
+    "KEI INDUSTRIES LTD.": "KEI",
+    "JINDAL STEEL LIMITED": "JINDALSTEL",
+    "CENTRAL DEPO SER (I) LTD": "CDSL",
+    "BAJAJ FINANCE LIMITED": "BAJFINANCE",
+    "MAHINDRA & MAHINDRA LTD": "M&M",  # Yahoo uses M&M.NS
+    "DABUR INDIA LTD": "DABUR",
+    "TRENT LTD": "TRENT",
+    "JIO FIN SERVICES LTD": "JIOFIN",
+    "IIFL FINANCE LIMITED": "IIFL",
+    "MUTHOOT FINANCE LIMITED": "MUTHOOTFIN",
+    "BOSCH LIMITED": "BOSCHLTD",
+    "HDFC LIFE INS CO LTD": "HDFCLIFE",
+    "ASIAN PAINTS LIMITED": "ASIANPAINT",
+    "DALMIA BHARAT LIMITED": "DALBHARAT",
+    "BLUE STAR LIMITED": "BLUESTARCO",
+    "HINDALCO INDUSTRIES LTD": "HINDALCO",
+    "360 ONE WAM LIMITED": "360ONE",
+    
+    # --- EXISTING MAPPINGS ---
     "PATANJALI FOODS LIMITED": "PATANJALI",
     "INDUSIND BANK LIMITED": "INDUSINDBK",
     "COAL INDIA LTD": "COALINDIA",
     "TATA MOTORS LIMITED": "TATAMOTORS",
     "INDIAN ENERGY EXC LTD": "IEX",
     "RELIANCE INDUSTRIES LTD": "RELIANCE",
-    "CENTRAL DEPO SER (I) LTD": "CDSL",
     "GRASIM INDUSTRIES LTD": "GRASIM",
     "INDIAN RENEWABLE ENERGY": "IREDA",
     "LIFE INSURA CORP OF INDIA": "LICI",
@@ -54,7 +82,6 @@ TICKER_CORRECTIONS = {
     "MANAPPURAM FINANCE LTD": "MANAPPURAM",
     "TORRENT PHARMACEUTICALS L": "TORNTPHARM",
     "BAJAJ AUTO LIMITED": "BAJAJ-AUTO",
-    "LIC HOUSING FINANCE LTD": "LICHSGFIN",
     "DR. REDDY S LABORATORIES": "DRREDDY",
     "CIPLA LTD": "CIPLA",
     "MANKIND PHARMA LIMITED": "MANKIND",
@@ -73,12 +100,10 @@ TICKER_CORRECTIONS = {
     "EXIDE INDUSTRIES LTD": "EXIDEIND",
     "INDUS TOWERS LIMITED": "INDUSTOWER",
     "BHARAT PETROLEUM CORP  LT": "BPCL",
-    "360 ONE WAM LIMITED": "360ONE",
     "SOLAR INDUSTRIES (I) LTD": "SOLARINDS",
     "TATA POWER CO LTD": "TATAPOWER",
     "SUPREME INDUSTRIES LTD": "SUPREMEIND",
     "ONE 97 COMMUNICATIONS LTD": "PAYTM",
-    "TATA TECHNOLOGIES LIMITED": "TATATECH",
     "HERO MOTOCORP LIMITED": "HEROMOTOCO",
     "MARICO LIMITED": "MARICO",
     "VODAFONE IDEA LIMITED": "IDEA",
@@ -90,18 +115,14 @@ TICKER_CORRECTIONS = {
     "HINDUSTAN AERONAUTICS LTD": "HAL",
     "BHARAT FORGE LTD": "BHARATFORG",
     "BHARTI AIRTEL LIMITED": "BHARTIARTL",
-    "TRENT LTD": "TRENT",
     "KALYAN JEWELLERS IND LTD": "KALYANKJIL",
     "AXIS BANK LIMITED": "AXISBANK",
-    "BOSCH LIMITED": "BOSCHLTD",
     "ZYDUS LIFESCIENCES LTD": "ZYDUSLIFE",
     "PI INDUSTRIES LTD": "PIIND",
     "HINDUSTAN PETROLEUM CORP": "HINDPETRO",
-    "MARUTI SUZUKI INDIA LTD.": "MARUTI",
     "THE PHOENIX MILLS LTD": "PHOENIXLTD",
     "NBCC (INDIA) LIMITED": "NBCC",
     "BSE LIMITED": "BSE",
-    "HINDUSTAN ZINC LIMITED": "HINDZINC",
     "IDFC FIRST BANK LIMITED": "IDFCFIRSTB",
     "HSG & URBAN DEV CORPN LTD": "HUDCO",
     "ITC LTD": "ITC",
@@ -110,24 +131,20 @@ TICKER_CORRECTIONS = {
     "TVS MOTOR COMPANY  LTD": "TVSMOTOR",
     "BHEL": "BHEL",
     "EICHER MOTORS LTD": "EICHERMOT",
-    "BAJAJ FINANCE LIMITED": "BAJFINANCE",
     "TATA ELXSI LIMITED": "TATAELXSI",
     "NCC LIMITED": "NCC",
     "OBEROI REALTY LIMITED": "OBEROIRLTY",
     "HAVELLS INDIA LIMITED": "HAVELLS",
     "TATA CONSULTANCY SERV LT": "TCS",
-    "JINDAL STEEL LIMITED": "JINDALSTEL",
     "CROMPT GREA CON ELEC LTD": "CROMPTON",
     "ALKEM LABORATORIES LTD.": "ALKEM",
     "ICICI BANK LTD.": "ICICIBANK",
     "DLF LIMITED": "DLF",
     "NESTLE INDIA LIMITED": "NESTLEIND",
     "AMBER ENTERPRISES (I) LTD": "AMBER",
-    "SYNGENE INTERNATIONAL LTD": "SYNGENE",
     "DIXON TECHNO (INDIA) LTD": "DIXON",
     "COMPUTER AGE MNGT SER LTD": "CAMS",
     "BIOCON LIMITED.": "BIOCON",
-    "DABUR INDIA LTD": "DABUR",
     "PAGE INDUSTRIES LTD": "PAGEIND",
     "ADANI PORT & SEZ LTD": "ADANIPORTS",
     "SONA BLW PRECISION FRGS L": "SONACOMS",
@@ -136,8 +153,6 @@ TICKER_CORRECTIONS = {
     "CONTAINER CORP OF IND LTD": "CONCOR",
     "COFORGE LIMITED": "COFORGE",
     "HDFC AMC LIMITED": "HDFCAMC",
-    "HDFC LIFE INS CO LTD": "HDFCLIFE",
-    "DALMIA BHARAT LIMITED": "DALBHARAT",
     "ASTRAL LIMITED": "ASTRAL",
     "CUMMINS INDIA LTD": "CUMMINSIND",
     "ANGEL ONE LIMITED": "ANGELONE",
@@ -161,16 +176,12 @@ TICKER_CORRECTIONS = {
     "LODHA DEVELOPERS LIMITED": "LODHA",
     "NTPC LTD": "NTPC",
     "CG POWER AND IND SOL LTD": "CGPOWER",
-    "MAHINDRA & MAHINDRA LTD": "M_M",
     "INDIAN OIL CORP LTD": "IOC",
     "HFCL LIMITED": "HFCL",
     "KPIT TECHNOLOGIES LIMITED": "KPITTECH",
     "SAMMAAN CAPITAL LIMITED": "SAMMAANCAP",
-    "HINDALCO  INDUSTRIES  LTD": "HINDALCO",
     "PERSISTENT SYSTEMS LTD": "PERSISTENT",
     "CHOLAMANDALAM IN & FIN CO": "CHOLAFIN",
-    "INOX WIND LIMITED": "INOXWIND",
-    "BLUE STAR LIMITED": "BLUESTARCO",
     "ABB INDIA LIMITED": "ABB",
     "LARSEN & TOUBRO LTD.": "LT",
     "ULTRATECH CEMENT LIMITED": "ULTRACEMCO",
@@ -197,7 +208,6 @@ TICKER_CORRECTIONS = {
     "ORACLE FIN SERV SOFT LTD.": "OFSS",
     "BANDHAN BANK LIMITED": "BANDHANBNK",
     "TECH MAHINDRA LIMITED": "TECHM",
-    "IIFL FINANCE LIMITED": "IIFL",
     "JIO FIN SERVICES LTD": "JIOFIN",
     "MPHASIS LIMITED": "MPHASIS",
     "SIEMENS LTD": "SIEMENS",
@@ -216,14 +226,11 @@ TICKER_CORRECTIONS = {
     "TITAN COMPANY LIMITED": "TITAN",
     "VOLTAS LTD": "VOLTAS",
     "SRF LTD": "SRF",
-    "ASIAN PAINTS LIMITED": "ASIANPAINT",
-    "MUTHOOT FINANCE LIMITED": "MUTHOOTFIN",
     "PB FINTECH LIMITED": "POLICYBZR",
     "POLYCAB INDIA LIMITED": "POLYCAB",
     "BHARAT ELECTRONICS LTD": "BEL",
     "BANK OF INDIA": "BANKINDIA",
     "BHARAT DYNAMICS LIMITED": "BDL",
-    "HINDUSTAN UNILEVER LTD.": "HINDUNILVR",
     "POWER GRID CORP. LTD.": "POWERGRID",
     "GODREJ PROPERTIES LTD": "GODREJPROP",
     "GMR AIRPORTS LIMITED": "GMRAIRPORT",
@@ -231,7 +238,6 @@ TICKER_CORRECTIONS = {
     "INDIAN BANK": "INDIANB",
     "PIRAMAL PHARMA LIMITED": "PPLPHARMA",
     "OIL AND NATURAL GAS CORP.": "ONGC",
-    "KEI INDUSTRIES LTD.": "KEI",
     "LAURUS LABS LIMITED": "LAURUSLABS",
     "STATE BANK OF INDIA": "SBIN",
     "SHREE CEMENT LIMITED": "SHREECEM",
@@ -248,7 +254,7 @@ TICKER_CORRECTIONS = {
     "TATA CHEMICALS LTD": "TATACHEM"
 }
 
-# --- LOAD DATA FROM DYNAMODB (KEPT EXACTLY AS IS) ---
+# --- LOAD DATA FROM DYNAMODB ---
 @st.cache_data(ttl=60)
 def load_data_from_dynamodb(target_date):
     try:
@@ -287,7 +293,6 @@ def load_data_from_dynamodb(target_date):
     elif 'Signal' in df.columns:
         df['Direction'] = df['Signal'].map({'LONG': 'LONG', 'SHORT': 'SHORT'})
     
-    # Ensure numeric cols exist
     numeric_cols = ['SignalPrice', 'TargetPrice', 'TargetPct', 'RVOL', 'NetMovePct', 'RangeSoFarPct']
     for col in numeric_cols:
         if col not in df.columns: df[col] = 0.0
@@ -295,7 +300,7 @@ def load_data_from_dynamodb(target_date):
         
     return df
 
-# --- LIVE DATA ENGINE (REQUIRED FOR PNL %) ---
+# --- LIVE DATA ENGINE ---
 def fetch_live_updates(df):
     if df.empty or 'Name' not in df.columns: return df
 
@@ -306,7 +311,6 @@ def fetch_live_updates(df):
     yahoo_tickers = [f"{t}.NS" for t in unique_tickers]
     
     try:
-        # Fast batch download
         live_data = yf.download(tickers=yahoo_tickers, period="1d", interval="1m", progress=False)['Close'].iloc[-1]
         
         price_map = {}
@@ -331,36 +335,52 @@ def fetch_live_updates(df):
         
     return df
 
+# --- SECTOR FETCHING HELPER ---
+@st.cache_data(show_spinner=False)
+def get_sector_map(ticker_list):
+    sector_map = {}
+    for ticker in ticker_list:
+        try:
+            yf_ticker = f"{ticker}.NS"
+            info = yf.Ticker(yf_ticker).info
+            sector = info.get('sector', 'Others')
+            
+            # Shorter names
+            if sector == 'Financial Services': sector = 'FIN SERVICE'
+            if sector == 'Technology': sector = 'IT'
+            if sector == 'Consumer Cyclical': sector = 'AUTO' 
+            if sector == 'Basic Materials': sector = 'METAL'
+            
+            sector_map[ticker] = sector.upper()
+        except:
+            sector_map[ticker] = 'OTHERS'
+    return sector_map
+
 # --- MAIN APP UI ---
 
-# 1. SIDEBAR (NEW)
+# 1. SIDEBAR
 with st.sidebar:
     selected = option_menu(
         menu_title="TradeFinder",
-        options=["Market Pulse", "Insider Strategy", "Sector Scope"],
-        icons=["activity", "eye", "grid"],
+        options=["Market Pulse", "Sector Scope"], # REMOVED INSIDER STRATEGY
+        icons=["activity", "grid"],
         menu_icon="cast",
         default_index=0,
     )
     st.divider()
-    
-    # Date Selection (Moved to Sidebar)
     india_tz = pytz.timezone('Asia/Kolkata')
     today_india = datetime.now(india_tz).date()
     selected_date = st.date_input("📅 Select Date", today_india)
 
-# 2. MARKET PULSE PAGE (THE DASHBOARD)
+# 2. MARKET PULSE PAGE
 if selected == "Market Pulse":
     st.title("🚀 Market Pulse")
-
-    # Load Data
     df = load_data_from_dynamodb(selected_date)
     
     if df.empty:
         st.info(f"No alerts found for {selected_date}")
         st.stop()
 
-    # Fetch Live Updates (Only for Today)
     if selected_date == today_india:
         with st.spinner('⚡ Fetching Live Market Rates...'):
             df = fetch_live_updates(df)
@@ -368,66 +388,92 @@ if selected == "Market Pulse":
         df['Live_Price'] = 0.0
         df['Live_Move_Pct'] = 0.0
 
-    # Chart Link Prep
     if 'Name' in df.columns:
         df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
         df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df['Cleaned_Name'].str.replace(' ', '')
         df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + df['TV_Symbol']
 
-    # --- SPLIT LAYOUT (BULLISH vs BEARISH) ---
     col1, col2 = st.columns(2)
 
-    # LEFT COLUMN: BULLISH
     with col1:
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("🟢 BULLISH BEACONS")
-        
         bull_df = df[df['Direction'] == 'LONG'].copy()
         if not bull_df.empty:
             bull_df = bull_df.sort_values(by='Live_Move_Pct', ascending=False)
-            
             st.data_editor(
-                bull_df[['Chart', 'Name', 'Live_Move_Pct', 'SignalPrice', 'Live_Price']],
+                bull_df[['Chart', 'Name', 'Live_Move_Pct', 'Time', 'RVOL']], # <-- Swapped Columns
                 column_config={
                     "Chart": st.column_config.LinkColumn("View", display_text="📈"),
-                    "Live_Move_Pct": st.column_config.ProgressColumn("PnL %", format="%.2f%%", min_value=-5, max_value=5),
-                    "Live_Price": st.column_config.NumberColumn("CMP", format="%.2f"),
-                    "SignalPrice": st.column_config.NumberColumn("Entry", format="%.2f"),
+                    "Live_Move_Pct": st.column_config.ProgressColumn("%", format="%.2f%%", min_value=-5, max_value=5), # <-- Renamed to %
+                    "Time": st.column_config.TextColumn("Entry Time"), # <-- Added Time
+                    "RVOL": st.column_config.NumberColumn("RVOL", format="%.2fx"), # <-- Added RVOL
                 },
-                hide_index=True,
-                use_container_width=True,
-                disabled=True,
-                key="bull_table"
+                hide_index=True, use_container_width=True, disabled=True, key="bull_table"
             )
         else:
             st.caption("No Bullish Signals yet.")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # RIGHT COLUMN: BEARISH
     with col2:
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("🔴 BEARISH DRAGONS")
-        
         bear_df = df[df['Direction'] == 'SHORT'].copy()
         if not bear_df.empty:
-            bear_df = bear_df.sort_values(by='Live_Move_Pct', ascending=True) # Sort losers to top
-            
+            bear_df = bear_df.sort_values(by='Live_Move_Pct', ascending=True)
             st.data_editor(
-                bear_df[['Chart', 'Name', 'Live_Move_Pct', 'SignalPrice', 'Live_Price']],
+                bear_df[['Chart', 'Name', 'Live_Move_Pct', 'Time', 'RVOL']], # <-- Swapped Columns
                 column_config={
                     "Chart": st.column_config.LinkColumn("View", display_text="📉"),
-                    "Live_Move_Pct": st.column_config.ProgressColumn("PnL %", format="%.2f%%", min_value=-5, max_value=5),
-                    "Live_Price": st.column_config.NumberColumn("CMP", format="%.2f"),
-                    "SignalPrice": st.column_config.NumberColumn("Entry", format="%.2f"),
+                    "Live_Move_Pct": st.column_config.ProgressColumn("%", format="%.2f%%", min_value=-5, max_value=5), # <-- Renamed to %
+                    "Time": st.column_config.TextColumn("Entry Time"),
+                    "RVOL": st.column_config.NumberColumn("RVOL", format="%.2fx"),
                 },
-                hide_index=True,
-                use_container_width=True,
-                disabled=True,
-                key="bear_table"
+                hide_index=True, use_container_width=True, disabled=True, key="bear_table"
             )
         else:
             st.caption("No Bearish Signals yet.")
         st.markdown('</div>', unsafe_allow_html=True)
 
-else:
-    st.write("Work in progress page...")
+# 3. SECTOR SCOPE PAGE
+elif selected == "Sector Scope":
+    st.title("🏙️ Sector Scope")
+    st.caption("Active Sectors based on alerts")
+
+    df = load_data_from_dynamodb(selected_date)
+    if df.empty:
+        st.info(f"No alerts found for {selected_date}")
+        st.stop()
+
+    if 'Name' in df.columns:
+        df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
+        unique_stocks = df['Cleaned_Name'].unique().tolist()
+        
+        with st.spinner(f"Mapping sectors for {len(unique_stocks)} stocks..."):
+            sector_mapping = get_sector_map(unique_stocks)
+        
+        df['Sector'] = df['Cleaned_Name'].map(sector_mapping)
+        sector_counts = df['Sector'].value_counts().reset_index()
+        sector_counts.columns = ['Sector', 'Count']
+
+        # ALTAIR CHART (GREEN BARS + DARK THEME)
+        chart = alt.Chart(sector_counts).mark_bar(
+            color='#2ecc71',
+            cornerRadiusTopLeft=5,
+            cornerRadiusTopRight=5
+        ).encode(
+            x=alt.X('Sector', sort='-y', axis=alt.Axis(labelAngle=-90, title=None)),
+            y=alt.Y('Count', axis=alt.Axis(title=None, tickMinStep=1)),
+            tooltip=['Sector', 'Count']
+        ).configure_axis(
+            grid=False, labelColor='#eee', domainColor='#333'
+        ).configure_view(strokeWidth=0).properties(height=400)
+
+        st.altair_chart(chart, use_container_width=True)
+
+        st.divider()
+        st.subheader("Sector Details")
+        st.dataframe(
+            df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
+            use_container_width=True, hide_index=True
+        )
