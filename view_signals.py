@@ -253,8 +253,14 @@ TICKER_CORRECTIONS = {
     "MAZAGON DOCK SHIPBUIL LTD": "MAZDOCK",
     "TATA CHEMICALS LTD": "TATACHEM",
     "PG ELECTROPLAST LIMITED": "PGEL",
-    "HINDALCO  INDUSTRIES  LTD": "HINDALCO"
-    
+    "HINDALCO  INDUSTRIES  LTD": "HINDALCO",
+    "SWIGGY LIMITED": "SWIGGY",
+    "SWIGGY LTD": "SWIGGY",
+    "PREMIER ENERGIES LIMITED": "PREMIERENE",
+    "PREMIER ENERGIES LTD": "PREMIERENE",
+    "BAJAJ HOLDINGS & INVESTMENT LIMITED": "BAJAJHLDNG",
+    "BAJAJ HOLDINGS & INVESTMENT LTD": "BAJAJHLDNG"
+
 }
 
 # --- 3. LOAD DATA FROM DYNAMODB ---
@@ -489,6 +495,7 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
+
 
 
 
