@@ -12,18 +12,48 @@ from streamlit_autorefresh import st_autorefresh
 from streamlit_option_menu import option_menu
 
 # --- 1. PAGE CONFIG & AUTO REFRESH ---
-st.set_page_config(page_title="Scanner Dashboard", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="Alpha Stream", layout="wide", page_icon="🚀")
 count = st_autorefresh(interval=300 * 1000, key="datarefresh")
 
-# --- 2. CUSTOM CSS ---
+# --- 2. CUSTOM CSS (MODERN UI) ---
 st.markdown("""
 <style>
-    .dashboard-card {
-        background-color: #1E1E1E;
-        padding: 20px;
-        border-radius: 10px;
-        border: 1px solid #333;
-        margin-bottom: 20px;
+    /* Global Background & Font */
+    .stApp {
+        background-color: #0e1117;
+        font-family: 'Inter', sans-serif;
+    }
+    
+    /* Custom Header Styles */
+    .header-bullish {
+        color: #00FF7F;
+        border-bottom: 2px solid #00FF7F;
+        padding-bottom: 10px;
+        margin-bottom: 15px;
+        font-size: 1.5rem;
+        font-weight: 600;
+        letter-spacing: 1px;
+    }
+    
+    .header-bearish {
+        color: #FF4B4B;
+        border-bottom: 2px solid #FF4B4B;
+        padding-bottom: 10px;
+        margin-bottom: 15px;
+        font-size: 1.5rem;
+        font-weight: 600;
+        letter-spacing: 1px;
+    }
+
+    /* Metric Cards Styling */
+    [data-testid="stMetricValue"] {
+        font-size: 2rem;
+    }
+    
+    /* Adjust spacing */
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -34,9 +64,8 @@ DYNAMODB_TABLE = os.getenv("DYNAMODB_TABLE", "SentAlerts")
 DEFAULT_EXCHANGE = "NSE"
 
 # === TRADINGVIEW & YAHOO MAPPING ===
-# This dictionary corrects the DynamoDB names to valid Ticker Symbols.
 TICKER_CORRECTIONS = {
-    # --- CRITICAL FIXES FROM YOUR SCREENSHOT ---
+    # ... (Keep your existing dictionary exactly as is) ...
     "LIC HOUSING FINANCE LTD": "LICHSGFIN",
     "INOX WIND LIMITED": "INOXWIND",
     "HINDUSTAN ZINC LIMITED": "HINDZINC",
@@ -65,7 +94,6 @@ TICKER_CORRECTIONS = {
     "HINDALCO INDUSTRIES LIMITED": "HINDALCO",
     "HINDALCO": "HINDALCO",
     "HINDALCO  INDUSTRIES  LTD": "HINDALCO",
-    # --- COMMON CORRECTIONS ---
     "PATANJALI FOODS LIMITED": "PATANJALI",
     "INDUSIND BANK LIMITED": "INDUSINDBK",
     "COAL INDIA LTD": "COALINDIA",
@@ -254,14 +282,12 @@ TICKER_CORRECTIONS = {
     "TATA CHEMICALS LTD": "TATACHEM",
     "PG ELECTROPLAST LIMITED": "PGEL",
     "HINDALCO  INDUSTRIES  LTD": "HINDALCO",
-    "BAJAJ HOLDINGS & INVS LTD": "BAJAJHLDNG",  # Matches "INVS" abbreviation
-    "WAAREE ENERGIES LIMITED": "WAAREEENER",    # Maps to correct 10-char symbol
-    "SWIGGY LIMITED": "SWIGGY",          # Maps to standard symbol, 
+    "BAJAJ HOLDINGS & INVS LTD": "BAJAJHLDNG",
+    "WAAREE ENERGIES LIMITED": "WAAREEENER",
+    "SWIGGY LIMITED": "SWIGGY",
     "FSN E COMMERCE VENTURES LTD": "NYKAA",
     "FSN E COMMERCE VENTURES LIMITED": "NYKAA",
-    "FSN E-COMMERCE VENTURES LTD": "NYKAA" # Note the hyphen
-
-
+    "FSN E-COMMERCE VENTURES LTD": "NYKAA"
 }
 
 # --- 3. LOAD DATA FROM DYNAMODB ---
@@ -316,7 +342,6 @@ def fetch_live_updates(df):
     df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
     
     # 2. Prepare Yahoo Tickers (Append .NS)
-    # We use Cleaned_Name to get the Base Symbol
     unique_tickers = df['Cleaned_Name'].unique().tolist()
     yahoo_tickers = [f"{t}.NS" for t in unique_tickers]
     
@@ -389,7 +414,13 @@ with st.sidebar:
 
 # 1. Alpha Stream
 if selected == "Alpha Stream":
-    st.title("🚀 Alpha Stream")
+    # Gradient Title
+    st.markdown("""
+        <h1 style='background: -webkit-linear-gradient(45deg, #00C9FF, #92FE9D); -webkit-background-clip: text; -webkit-text-fill-color: transparent;'>
+            🚀 Alpha Stream
+        </h1>
+    """, unsafe_allow_html=True)
+    
     df = load_data_from_dynamodb(selected_date)
     
     if df.empty:
@@ -403,55 +434,77 @@ if selected == "Alpha Stream":
         df['Live_Price'] = 0.0
         df['Live_Move_Pct'] = 0.0
 
-    # --- TRADINGVIEW LINK GENERATOR (PROTECTED) ---
+    # --- TRADINGVIEW LINK GENERATOR ---
     if 'Name' in df.columns:
-        # 1. Get Clean Symbol
         df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
-        # 2. Create TV Symbol (Replace & with _ for stocks like M&M)
         df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df['Cleaned_Name'].str.replace('&', '_').str.replace(' ', '')
         df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + df['TV_Symbol']
 
+    # --- TOP METRICS ROW ---
+    bull_count = len(df[df['Direction'] == 'LONG'])
+    bear_count = len(df[df['Direction'] == 'SHORT'])
+    
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.metric("Bullish Signals", bull_count, delta="Long Bias", delta_color="normal")
+    with m2:
+        st.metric("Bearish Signals", bear_count, delta="Short Bias", delta_color="inverse")
+    with m3:
+        st.metric("Total Active", bull_count + bear_count)
+
+    st.divider()
+
     col1, col2 = st.columns(2)
 
+    # --- LEFT COL: BULLISH ---
     with col1:
-        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.subheader("🟢 BULLISH BEACONS")
-        bull_df = df[df['Direction'] == 'LONG'].copy()
-        if not bull_df.empty:
-            bull_df = bull_df.sort_values(by='Live_Move_Pct', ascending=False)
-            st.data_editor(
-                bull_df[['Chart', 'Name', 'Live_Move_Pct', 'Time', 'RVOL']], 
-                column_config={
-                    "Chart": st.column_config.LinkColumn("View", display_text="📈"),
-                    "Live_Move_Pct": st.column_config.ProgressColumn("%", format="%.2f%%", min_value=-5, max_value=5),
-                    "Time": st.column_config.TextColumn("Entry Time"), 
-                    "RVOL": st.column_config.NumberColumn("RVOL", format="%.2fx"),
-                },
-                hide_index=True, use_container_width=True, disabled=True, key="bull_table"
-            )
-        else:
-            st.caption("No Bullish Signals yet.")
-        st.markdown('</div>', unsafe_allow_html=True)
+        with st.container(border=True): # Uses native container with border (Card Style)
+            st.markdown('<div class="header-bullish">🟢 BULLISH BEACONS</div>', unsafe_allow_html=True)
+            bull_df = df[df['Direction'] == 'LONG'].copy()
+            if not bull_df.empty:
+                bull_df = bull_df.sort_values(by='Live_Move_Pct', ascending=False)
+                st.data_editor(
+                    bull_df[['Chart', 'Name', 'Live_Move_Pct', 'Time', 'RVOL']], 
+                    column_config={
+                        "Chart": st.column_config.LinkColumn("View", display_text="📈"),
+                        "Live_Move_Pct": st.column_config.ProgressColumn(
+                            "PnL %", 
+                            format="%.2f%%", 
+                            min_value=-5, 
+                            max_value=5,
+                        ),
+                        "Time": st.column_config.TextColumn("Entry Time"), 
+                        "RVOL": st.column_config.NumberColumn("RVOL", format="%.2fx"),
+                    },
+                    hide_index=True, use_container_width=True, disabled=True, key="bull_table"
+                )
+            else:
+                st.caption("No Bullish Signals yet.")
 
+    # --- RIGHT COL: BEARISH ---
     with col2:
-        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.subheader("🔴 BEARISH DRAGONS")
-        bear_df = df[df['Direction'] == 'SHORT'].copy()
-        if not bear_df.empty:
-            bear_df = bear_df.sort_values(by='Live_Move_Pct', ascending=True)
-            st.data_editor(
-                bear_df[['Chart', 'Name', 'Live_Move_Pct', 'Time', 'RVOL']], 
-                column_config={
-                    "Chart": st.column_config.LinkColumn("View", display_text="📉"),
-                    "Live_Move_Pct": st.column_config.ProgressColumn("%", format="%.2f%%", min_value=-5, max_value=5),
-                    "Time": st.column_config.TextColumn("Entry Time"),
-                    "RVOL": st.column_config.NumberColumn("RVOL", format="%.2fx"),
-                },
-                hide_index=True, use_container_width=True, disabled=True, key="bear_table"
-            )
-        else:
-            st.caption("No Bearish Signals yet.")
-        st.markdown('</div>', unsafe_allow_html=True)
+        with st.container(border=True): # Uses native container with border (Card Style)
+            st.markdown('<div class="header-bearish">🔴 BEARISH DRAGONS</div>', unsafe_allow_html=True)
+            bear_df = df[df['Direction'] == 'SHORT'].copy()
+            if not bear_df.empty:
+                bear_df = bear_df.sort_values(by='Live_Move_Pct', ascending=True)
+                st.data_editor(
+                    bear_df[['Chart', 'Name', 'Live_Move_Pct', 'Time', 'RVOL']], 
+                    column_config={
+                        "Chart": st.column_config.LinkColumn("View", display_text="📉"),
+                        "Live_Move_Pct": st.column_config.ProgressColumn(
+                            "PnL %", 
+                            format="%.2f%%", 
+                            min_value=-5, 
+                            max_value=5,
+                        ),
+                        "Time": st.column_config.TextColumn("Entry Time"),
+                        "RVOL": st.column_config.NumberColumn("RVOL", format="%.2fx"),
+                    },
+                    hide_index=True, use_container_width=True, disabled=True, key="bear_table"
+                )
+            else:
+                st.caption("No Bearish Signals yet.")
 
 # 2. Sector Scope
 elif selected == "Sector Scope":
@@ -464,7 +517,6 @@ elif selected == "Sector Scope":
         st.stop()
 
     if 'Name' in df.columns:
-        # Use Corrected Names for Sector Lookup too!
         df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
         unique_stocks = df['Cleaned_Name'].unique().tolist()
         
@@ -477,18 +529,19 @@ elif selected == "Sector Scope":
 
         # GREEN BAR CHART
         chart = alt.Chart(sector_counts).mark_bar(
-            color='#2ecc71',
+            color='#00FF7F', # Matching Neon Green
             cornerRadiusTopLeft=5,
             cornerRadiusTopRight=5
         ).encode(
-            x=alt.X('Sector', sort='-y', axis=alt.Axis(labelAngle=-90, title=None)),
+            x=alt.X('Sector', sort='-y', axis=alt.Axis(labelAngle=-45, title=None)),
             y=alt.Y('Count', axis=alt.Axis(title=None, tickMinStep=1)),
             tooltip=['Sector', 'Count']
         ).configure_axis(
             grid=False, labelColor='#eee', domainColor='#333'
         ).configure_view(strokeWidth=0).properties(height=400)
-
-        st.altair_chart(chart, use_container_width=True)
+        
+        with st.container(border=True):
+            st.altair_chart(chart, use_container_width=True)
 
         st.divider()
         st.subheader("Sector Details")
@@ -496,6 +549,3 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
-
-
-
