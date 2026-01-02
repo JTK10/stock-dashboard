@@ -8,7 +8,6 @@ from datetime import datetime
 import pytz
 import yfinance as yf
 import altair as alt
-import re  # <--- NEW: For smart text cleaning
 from streamlit_autorefresh import st_autorefresh
 from streamlit_option_menu import option_menu
 
@@ -34,179 +33,225 @@ AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
 DYNAMODB_TABLE = os.getenv("DYNAMODB_TABLE", "SentAlerts")
 DEFAULT_EXCHANGE = "NSE"
 
-# --- 3. SMART TICKER ENGINE (THE FIX) ---
-def get_yahoo_symbol(raw_name):
-    """
-    Smartly converts any company name to its NSE Yahoo Symbol.
-    1. Checks explicit map for tricky ones.
-    2. Applies rules to clean up standard names.
-    """
-    raw_name = str(raw_name).strip().upper()
-
-    # A. THE MASTER MAP (For stocks that don't match their names)
-    # Add any stock here that still shows 0.00
-    EXPLICIT_MAP = {
-        "NIFTY 50": "^NSEI",
-        "NIFTY BANK": "^NSEBANK",
-        "BAJAJ FINANCE": "BAJFINANCE",
-        "BAJAJ FINSERV": "BAJAJFINSV",
-        "M&M": "M&M",
-        "MAHINDRA & MAHINDRA": "M&M",
-        "L&T": "LT",
-        "LARSEN & TOUBRO": "LT",
-        "HINDUSTAN UNILEVER": "HINDUNILVR",
-        "HIND UNILEVER": "HINDUNILVR",
-        "TITAN COMPANY": "TITAN",
-        "SUN PHARMA": "SUNPHARMA",
-        "BHARAT PETROLEUM": "BPCL",
-        "HINDUSTAN PETROLEUM": "HINDPETRO",
-        "INDIAN OIL": "IOC",
-        "POWER GRID": "POWERGRID",
-        "HERO MOTOCORP": "HEROMOTOCO",
-        "TATA CONSUMER": "TATACONSUM",
-        "TATA MOTORS": "TATAMOTORS",
-        "TATA STEEL": "TATASTEEL",
-        "TATA POWER": "TATAPOWER",
-        "JIO FINANCIAL": "JIOFIN",
-        "LIC HOUSING": "LICHSGFIN",
-        "NAM-INDIA": "NAM-INDIA",
-        "MCDOWELL-N": "MCDOWELL-N",
-        "UNITED SPIRITS": "MCDOWELL-N",
-        "BRITANNIA": "BRITANNIA",
-        "NESTLE INDIA": "NESTLEIND",
-        "ASIAN PAINTS": "ASIANPAINT",
-        "INDUSIND BANK": "INDUSINDBK",
-        "KOTAK MAHINDRA BANK": "KOTAKBANK",
-        "AU SMALL FINANCE": "AUBANK",
-        "CHOLAMANDALAM INV": "CHOLAFIN",
-        "MUTHOOT FINANCE": "MUTHOOTFIN",
-        "SHRIRAM FINANCE": "SHRIRAMFIN",
-        "HDFC LIFE": "HDFCLIFE",
-        "SBI LIFE": "SBILIFE",
-        "ICICI PRU": "ICICIPRULI",
-        "ICICI LOMBARD": "ICICIGI",
-        "BAJAJ AUTO": "BAJAJ-AUTO",
-        "DIVIS LAB": "DIVISLAB",
-        "DR REDDY": "DRREDDY",
-        "APOLLO HOSPITALS": "APOLLOHOSP",
-        "MAX HEALTHCARE": "MAXHEALTH",
-        "SYNGENE INTL": "SYNGENE",
-        "GODREJ PROPERTIES": "GODREJPROP",
-        "GODREJ CONSUMER": "GODREJCP",
-        "BHARAT FORGE": "BHARATFORG",
-        "BALKRISHNA IND": "BALKRISIND",
-        "SAMVARDHANA MOTHERSON": "MOTHERSON",
-        "MOTHERSON SUMI": "MOTHERSON",
-        "EICHER MOTORS": "EICHERMOT",
-        "TVS MOTOR": "TVSMOTOR",
-        "HINDALCO": "HINDALCO",
-        "JINDAL STEEL": "JINDALSTEL",
-        "JSW STEEL": "JSWSTEEL",
-        "SAIL": "SAIL",
-        "COAL INDIA": "COALINDIA",
-        "ADANI ENTERPRISES": "ADANIENT",
-        "ADANI PORTS": "ADANIPORTS",
-        "AMBUJA CEMENTS": "AMBUJACEM",
-        "ULTRATECH CEMENT": "ULTRACEMCO",
-        "SHREE CEMENT": "SHREECEM",
-        "GRASIM IND": "GRASIM",
-        "PIDILITE IND": "PIDILITIND",
-        "BERGER PAINTS": "BERGEPAINT",
-        "HAVELLS INDIA": "HAVELLS",
-        "SIEMENS": "SIEMENS",
-        "ABB INDIA": "ABB",
-        "CUMMINS INDIA": "CUMMINSIND",
-        "BEL": "BEL",
-        "HAL": "HAL",
-        "BHEL": "BHEL",
-        "DLF": "DLF",
-        "OBEROI REALTY": "OBEROIRLTY",
-        "PHOENIX MILLS": "PHOENIXLTD",
-        "PRESTIGE ESTATES": "PRESTIGE",
-        "IRCTC": "IRCTC",
-        "INFO EDGE": "NAUKRI",
-        "ZOMATO": "ZOMATO",
-        "PAYTM": "PAYTM",
-        "PB FINTECH": "POLICYBZR",
-        "FSN E-COMMERCE": "NYKAA",
-        "LTIMINDTREE": "LTIM",
-        "TECH MAHINDRA": "TECHM",
-        "WIPRO": "WIPRO",
-        "INFOSYS": "INFY",
-        "TCS": "TCS",
-        "HCL TECH": "HCLTECH",
-        "PERSISTENT SYS": "PERSISTENT",
-        "COFORGE": "COFORGE",
-        "MPHASIS": "MPHASIS",
-        "INTERGLOBE AVIATION": "INDIGO",
-        "PI INDUSTRIES": "PIIND",
-        "UPL": "UPL",
-        "COROMANDEL INTL": "COROMANDEL",
-        "SRF": "SRF",
-        "NAVIN FLUORINE": "NAVINFLUOR",
-        "AARTI IND": "AARTIIND",
-        "TATA CHEMICALS": "TATACHEM",
-        "TRENT": "TRENT",
-        "ABFRL": "ABFRL",
-        "PAGE INDUSTRIES": "PAGEIND",
-        "BOSCH": "BOSCHLTD",
-        "MRF": "MRF",
-        "APOLLO TYRES": "APOLLOTYRE",
-        "EXIDE IND": "EXIDEIND",
-        "VOLTAS": "VOLTAS",
-        "CROMPTON GREAVES": "CROMPTON",
-        "WHIRLPOOL": "WHIRLPOOL",
-        "BLUE STAR": "BLUESTARCO",
-        "DIXON TECH": "DIXON",
-        "POLYCAB": "POLYCAB",
-        "KEI INDUSTRIES": "KEI",
-        "ASTRAL": "ASTRAL",
-        "SUPREME IND": "SUPREMEIND",
-        "BALRAMPUR CHINI": "BALRAMCHIN",
-        "JUBILANT FOOD": "JUBLFOOD",
-        "ZEE ENT": "ZEEL",
-        "PVR INOX": "PVRINOX",
-        "SUN TV": "SUNTV",
-        "CONCOR": "CONCOR",
-        "DELHIVERY": "DELHIVERY",
-        "TATA ELXSI": "TATAELXSI",
-        "KPIT TECH": "KPITTECH",
-        "TATA TECHNOLOGIES": "TATATECH",
-        "J&K BANK": "J&KBANK",
-        "CANARA BANK": "CANBK",
-        "BANK OF BARODA": "BANKBARODA",
-        "PUNJAB NATIONAL": "PNB",
-        "UNION BANK": "UNIONBANK",
-        "INDIAN BANK": "INDIANB",
-        "IDFC FIRST": "IDFCFIRSTB",
-        "FEDERAL BANK": "FEDERALBNK",
-        "RBL BANK": "RBLBANK",
-        "BANDHAN BANK": "BANDHANBNK",
-        "CITY UNION BANK": "CUB",
-    }
+# === TRADINGVIEW & YAHOO MAPPING ===
+# This dictionary corrects the DynamoDB names to valid Ticker Symbols.
+TICKER_CORRECTIONS = {
+    # --- CRITICAL FIXES FROM YOUR SCREENSHOT ---
+    "LIC HOUSING FINANCE LTD": "LICHSGFIN",
+    "INOX WIND LIMITED": "INOXWIND",
+    "HINDUSTAN ZINC LIMITED": "HINDZINC",
+    "HINDUSTAN UNILEVER LTD.": "HINDUNILVR",
+    "TATA TECHNOLOGIES LIMITED": "TATATECH",
+    "SYNGENE INTERNATIONAL LTD": "SYNGENE",
+    "MARUTI SUZUKI INDIA LTD.": "MARUTI",
+    "KEI INDUSTRIES LTD.": "KEI",
+    "JINDAL STEEL LIMITED": "JINDALSTEL",
+    "CENTRAL DEPO SER (I) LTD": "CDSL",
+    "BAJAJ FINANCE LIMITED": "BAJFINANCE",
+    "MAHINDRA & MAHINDRA LTD": "M&M", 
+    "DABUR INDIA LTD": "DABUR",
+    "TRENT LTD": "TRENT",
+    "JIO FIN SERVICES LTD": "JIOFIN",
+    "IIFL FINANCE LIMITED": "IIFL",
+    "MUTHOOT FINANCE LIMITED": "MUTHOOTFIN",
+    "BOSCH LIMITED": "BOSCHLTD",
+    "HDFC LIFE INS CO LTD": "HDFCLIFE",
+    "ASIAN PAINTS LIMITED": "ASIANPAINT",
+    "DALMIA BHARAT LIMITED": "DALBHARAT",
+    "BLUE STAR LIMITED": "BLUESTARCO",
+    "HINDALCO INDUSTRIES LTD": "HINDALCO",
+    "360 ONE WAM LIMITED": "360ONE",
     
-    # 1. Check Exact Match in Dict
-    for key, val in EXPLICIT_MAP.items():
-        if key in raw_name:
-            return f"{val}.NS"
+    # --- COMMON CORRECTIONS ---
+    "PATANJALI FOODS LIMITED": "PATANJALI",
+    "INDUSIND BANK LIMITED": "INDUSINDBK",
+    "COAL INDIA LTD": "COALINDIA",
+    "TATA MOTORS LIMITED": "TATAMOTORS",
+    "INDIAN ENERGY EXC LTD": "IEX",
+    "RELIANCE INDUSTRIES LTD": "RELIANCE",
+    "GRASIM INDUSTRIES LTD": "GRASIM",
+    "INDIAN RENEWABLE ENERGY": "IREDA",
+    "LIFE INSURA CORP OF INDIA": "LICI",
+    "FEDERAL BANK LTD": "FEDERALBNK",
+    "JSW STEEL LIMITED": "JSWSTEEL",
+    "RAIL VIKAS NIGAM LIMITED": "RVNL",
+    "PIDILITE INDUSTRIES LTD": "PIDILITIND",
+    "MANAPPURAM FINANCE LTD": "MANAPPURAM",
+    "TORRENT PHARMACEUTICALS L": "TORNTPHARM",
+    "BAJAJ AUTO LIMITED": "BAJAJ-AUTO",
+    "DR. REDDY S LABORATORIES": "DRREDDY",
+    "CIPLA LTD": "CIPLA",
+    "MANKIND PHARMA LIMITED": "MANKIND",
+    "NATIONAL ALUMINIUM CO LTD": "NATIONALUM",
+    "CANARA BANK": "CANBK",
+    "AVENUE SUPERMARTS LIMITED": "DMART",
+    "STEEL AUTHORITY OF INDIA": "SAIL",
+    "INDIAN RAIL TOUR CORP LTD": "IRCTC",
+    "TORRENT POWER LTD": "TORNTPOWER",
+    "JUBILANT FOODWORKS LTD": "JUBLFOOD",
+    "INFO EDGE (I) LTD": "NAUKRI",
+    "INTERGLOBE AVIATION LTD": "INDIGO",
+    "UNION BANK OF INDIA": "UNIONBANK",
+    "BAJAJ FINSERV LTD.": "BAJAJFINSV",
+    "SUN PHARMACEUTICAL IND L": "SUNPHARMA",
+    "EXIDE INDUSTRIES LTD": "EXIDEIND",
+    "INDUS TOWERS LIMITED": "INDUSTOWER",
+    "BHARAT PETROLEUM CORP  LT": "BPCL",
+    "SOLAR INDUSTRIES (I) LTD": "SOLARINDS",
+    "TATA POWER CO LTD": "TATAPOWER",
+    "SUPREME INDUSTRIES LTD": "SUPREMEIND",
+    "ONE 97 COMMUNICATIONS LTD": "PAYTM",
+    "HERO MOTOCORP LIMITED": "HEROMOTOCO",
+    "MARICO LIMITED": "MARICO",
+    "VODAFONE IDEA LIMITED": "IDEA",
+    "BRITANNIA INDUSTRIES LTD": "BRITANNIA",
+    "ICICI PRU LIFE INS CO LTD": "ICICIPRULI",
+    "AU SMALL FINANCE BANK LTD": "AUBANK",
+    "INDIAN RAILWAY FIN CORP L": "IRFC",
+    "FORTIS HEALTHCARE LTD": "FORTIS",
+    "HINDUSTAN AERONAUTICS LTD": "HAL",
+    "BHARAT FORGE LTD": "BHARATFORG",
+    "BHARTI AIRTEL LIMITED": "BHARTIARTL",
+    "KALYAN JEWELLERS IND LTD": "KALYANKJIL",
+    "AXIS BANK LIMITED": "AXISBANK",
+    "ZYDUS LIFESCIENCES LTD": "ZYDUSLIFE",
+    "PI INDUSTRIES LTD": "PIIND",
+    "HINDUSTAN PETROLEUM CORP": "HINDPETRO",
+    "THE PHOENIX MILLS LTD": "PHOENIXLTD",
+    "NBCC (INDIA) LIMITED": "NBCC",
+    "BSE LIMITED": "BSE",
+    "IDFC FIRST BANK LIMITED": "IDFCFIRSTB",
+    "HSG & URBAN DEV CORPN LTD": "HUDCO",
+    "ITC LTD": "ITC",
+    "AUROBINDO PHARMA LTD": "AUROPHARMA",
+    "KAYNES TECHNOLOGY IND LTD": "KAYNES",
+    "TVS MOTOR COMPANY  LTD": "TVSMOTOR",
+    "BHEL": "BHEL",
+    "EICHER MOTORS LTD": "EICHERMOT",
+    "TATA ELXSI LIMITED": "TATAELXSI",
+    "NCC LIMITED": "NCC",
+    "OBEROI REALTY LIMITED": "OBEROIRLTY",
+    "HAVELLS INDIA LIMITED": "HAVELLS",
+    "TATA CONSULTANCY SERV LT": "TCS",
+    "CROMPT GREA CON ELEC LTD": "CROMPTON",
+    "ALKEM LABORATORIES LTD.": "ALKEM",
+    "ICICI BANK LTD.": "ICICIBANK",
+    "DLF LIMITED": "DLF",
+    "NESTLE INDIA LIMITED": "NESTLEIND",
+    "AMBER ENTERPRISES (I) LTD": "AMBER",
+    "DIXON TECHNO (INDIA) LTD": "DIXON",
+    "COMPUTER AGE MNGT SER LTD": "CAMS",
+    "BIOCON LIMITED.": "BIOCON",
+    "PAGE INDUSTRIES LTD": "PAGEIND",
+    "ADANI PORT & SEZ LTD": "ADANIPORTS",
+    "SONA BLW PRECISION FRGS L": "SONACOMS",
+    "CYIENT LIMITED": "CYIENT",
+    "ADANI GREEN ENERGY LTD": "ADANIGREEN",
+    "CONTAINER CORP OF IND LTD": "CONCOR",
+    "COFORGE LIMITED": "COFORGE",
+    "HDFC AMC LIMITED": "HDFCAMC",
+    "ASTRAL LIMITED": "ASTRAL",
+    "CUMMINS INDIA LTD": "CUMMINSIND",
+    "ANGEL ONE LIMITED": "ANGELONE",
+    "SUZLON ENERGY LIMITED": "SUZLON",
+    "ETERNAL LIMITED": "ETERNAL",
+    "APL APOLLO TUBES LTD": "APLAPOLLO",
+    "HCL TECHNOLOGIES LTD": "HCLTECH",
+    "AMBUJA CEMENTS LTD": "AMBUJACEM",
+    "PG ELECTROPLAST LTD": "PGEL",
+    "COLGATE PALMOLIVE LTD.": "COLPAL",
+    "TATA CONSUMER PRODUCT LTD": "TATACONSUM",
+    "KOTAK MAHINDRA BANK LTD": "KOTAKBANK",
+    "NHPC LTD": "NHPC",
+    "SBI CARDS & PAY SER LTD": "SBICARD",
+    "ICICI LOMBARD GIC LIMITED": "ICICIGI",
+    "HDFC BANK LTD": "HDFCBANK",
+    "LUPIN LIMITED": "LUPIN",
+    "SBI LIFE INSURANCE CO LTD": "SBILIFE",
+    "NMDC LTD.": "NMDC",
+    "APOLLO HOSPITALS ENTER. L": "APOLLOHOSP",
+    "LODHA DEVELOPERS LIMITED": "LODHA",
+    "NTPC LTD": "NTPC",
+    "CG POWER AND IND SOL LTD": "CGPOWER",
+    "INDIAN OIL CORP LTD": "IOC",
+    "HFCL LIMITED": "HFCL",
+    "KPIT TECHNOLOGIES LIMITED": "KPITTECH",
+    "SAMMAAN CAPITAL LIMITED": "SAMMAANCAP",
+    "PERSISTENT SYSTEMS LTD": "PERSISTENT",
+    "CHOLAMANDALAM IN & FIN CO": "CHOLAFIN",
+    "ABB INDIA LIMITED": "ABB",
+    "LARSEN & TOUBRO LTD.": "LT",
+    "ULTRATECH CEMENT LIMITED": "ULTRACEMCO",
+    "INFOSYS LIMITED": "INFY",
+    "GAIL (INDIA) LTD": "GAIL",
+    "PETRONET LNG LIMITED": "PETRONET",
+    "POWER FIN CORP LTD.": "PFC",
+    "PNB HOUSING FIN LTD.": "PNBHOUSING",
+    "WIPRO LTD": "WIPRO",
+    "REC LIMITED": "RECLTD",
+    "PRESTIGE ESTATE LTD": "PRESTIGE",
+    "FSN E COMMERCE VENTURES": "NYKAA",
+    "ADANI ENERGY SOLUTION LTD": "ADANIENSOL",
+    "ADANI ENTERPRISES LIMITED": "ADANIENT",
+    "TATA STEEL LIMITED": "TATASTEEL",
+    "RBL BANK LIMITED": "RBLBANK",
+    "INDRAPRASTHA GAS LTD": "IGL",
+    "YES BANK LIMITED": "YESBANK",
+    "SAMVRDHNA MTHRSN INTL LTD": "MOTHERSON",
+    "GLENMARK PHARMACEUTICALS": "GLENMARK",
+    "ADITYA BIRLA CAPITAL LTD.": "ABCAPITAL",
+    "L&T FINANCE LIMITED": "LTF",
+    "UNO MINDA LIMITED": "UNOMINDA",
+    "ORACLE FIN SERV SOFT LTD.": "OFSS",
+    "BANDHAN BANK LIMITED": "BANDHANBNK",
+    "TECH MAHINDRA LIMITED": "TECHM",
+    "JIO FIN SERVICES LTD": "JIOFIN",
+    "MPHASIS LIMITED": "MPHASIS",
+    "SIEMENS LTD": "SIEMENS",
+    "OIL INDIA LTD": "OIL",
+    "JSW ENERGY LIMITED": "JSWENERGY",
+    "TUBE INVEST OF INDIA LTD": "TIINDIA",
+    "LTIMINDTREE LIMITED": "LTIM",
+    "ASHOK LEYLAND LTD": "ASHOKLEY",
+    "THE INDIAN HOTELS CO. LTD": "INDHOTEL",
+    "DELHIVERY LIMITED": "DELHIVERY",
+    "DIVI S LABORATORIES LTD": "DIVISLAB",
+    "TITAGARH RAIL SYSTEMS LTD": "TITAGARH",
+    "BANK OF BARODA": "BANKBARODA",
+    "MAX FINANCIAL SERV LTD": "MFSL",
+    "MULTI COMMODITY EXCHANGE": "MCX",
+    "TITAN COMPANY LIMITED": "TITAN",
+    "VOLTAS LTD": "VOLTAS",
+    "SRF LTD": "SRF",
+    "PB FINTECH LIMITED": "POLICYBZR",
+    "POLYCAB INDIA LIMITED": "POLYCAB",
+    "BHARAT ELECTRONICS LTD": "BEL",
+    "BANK OF INDIA": "BANKINDIA",
+    "BHARAT DYNAMICS LIMITED": "BDL",
+    "POWER GRID CORP. LTD.": "POWERGRID",
+    "GODREJ PROPERTIES LTD": "GODREJPROP",
+    "GMR AIRPORTS LIMITED": "GMRAIRPORT",
+    "GODREJ CONSUMER PRODUCTS": "GODREJCP",
+    "INDIAN BANK": "INDIANB",
+    "PIRAMAL PHARMA LIMITED": "PPLPHARMA",
+    "OIL AND NATURAL GAS CORP.": "ONGC",
+    "LAURUS LABS LIMITED": "LAURUSLABS",
+    "STATE BANK OF INDIA": "SBIN",
+    "SHREE CEMENT LIMITED": "SHREECEM",
+    "SHRIRAM FINANCE LIMITED": "SHRIRAMFIN",
+    "PUNJAB NATIONAL BANK": "PNB",
+    "UNITED SPIRITS LIMITED": "UNITDSPR",
+    "UPL LIMITED": "UPL",
+    "VARUN BEVERAGES LIMITED": "VBL",
+    "VEDANTA LIMITED": "VEDL",
+    "KFIN TECHNOLOGIES LIMITED": "KFINTECH",
+    "NUVAMA WEALTH MANAGE LTD": "NUVAMA",
+    "MAX HEALTHCARE INS LTD": "MAXHEALTH",
+    "MAZAGON DOCK SHIPBUIL LTD": "MAZDOCK",
+    "TATA CHEMICALS LTD": "TATACHEM"
+}
 
-    # B. SMART CLEANER (For regular names like 'INOX WIND LIMITED')
-    # Remove standard suffix junk
-    clean = raw_name
-    remove_words = [
-        "LIMITED", "LTD", "LTD.", "(INDIA)", "INDIA", "INDUSTRIES", 
-        "ENTERPRISES", "SERVICES", "FINANCE", "HOLDINGS", "SYSTEMS",
-        "TECHNOLOGIES", "CORP", "CORPORATION", "COMPANY", "BANK"
-    ]
-    for word in remove_words:
-        clean = clean.replace(word, "")
-    
-    # Remove special chars and spaces
-    clean = re.sub(r'[^A-Z0-9&]', '', clean)
-    
-    return f"{clean}.NS"
-
-# --- 4. LOAD DATA ---
+# --- 3. LOAD DATA FROM DYNAMODB ---
 @st.cache_data(ttl=60)
 def load_data_from_dynamodb(target_date):
     try:
@@ -235,7 +280,7 @@ def load_data_from_dynamodb(target_date):
 
     df = pd.DataFrame([convert_decimal(item) for item in items])
 
-    # Standardize
+    # Standardize Column Names
     if 'Price' in df.columns and 'SignalPrice' not in df.columns:
         df.rename(columns={'Price': 'SignalPrice'}, inplace=True)
     if 'Side' in df.columns:
@@ -250,30 +295,38 @@ def load_data_from_dynamodb(target_date):
     
     return df
 
-# --- 5. LIVE DATA ENGINE ---
+# --- 4. LIVE DATA ENGINE (YAHOO) ---
 def fetch_live_updates(df):
     if df.empty or 'Name' not in df.columns: return df
 
-    # Generate Yahoo Tickers using the Smart Engine
-    df['Yahoo_Ticker'] = df['Name'].apply(get_yahoo_symbol)
+    # 1. Clean Names using the Dictionary
+    df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
     
-    unique_tickers = df['Yahoo_Ticker'].unique().tolist()
+    # 2. Prepare Yahoo Tickers (Append .NS)
+    # We use Cleaned_Name to get the Base Symbol
+    unique_tickers = df['Cleaned_Name'].unique().tolist()
+    yahoo_tickers = [f"{t}.NS" for t in unique_tickers]
     
     try:
-        live_data = yf.download(tickers=unique_tickers, period="1d", interval="1m", progress=False)['Close'].iloc[-1]
+        # Fast batch download
+        live_data = yf.download(tickers=yahoo_tickers, period="1d", interval="1m", progress=False)['Close'].iloc[-1]
         
         price_map = {}
         for ticker in unique_tickers:
+            yf_ticker = f"{ticker}.NS"
             try:
                 if isinstance(live_data, pd.Series):
-                    price = live_data.get(ticker, 0)
+                    price = live_data.get(yf_ticker, 0)
                 else:
                     price = live_data if len(unique_tickers) == 1 else 0
                 price_map[ticker] = float(price) if price > 0 else 0
             except:
                 price_map[ticker] = 0
 
-        df['Live_Price'] = df['Yahoo_Ticker'].map(price_map)
+        # Map back to DataFrame
+        df['Live_Price'] = df['Cleaned_Name'].map(price_map)
+        
+        # Calc PnL
         df['Live_Move_Pct'] = ((df['Live_Price'] - df['SignalPrice']) / df['SignalPrice']) * 100
         df['Live_Move_Pct'] = df['Live_Move_Pct'].fillna(0.0)
         
@@ -283,28 +336,31 @@ def fetch_live_updates(df):
         
     return df
 
-# --- SECTOR FETCHING HELPER ---
+# --- 5. SECTOR FETCHING HELPER ---
 @st.cache_data(show_spinner=False)
-def get_sector_map(ticker_list):
+def get_sector_map(clean_ticker_list):
     sector_map = {}
-    for raw_name in ticker_list:
+    for ticker in clean_ticker_list:
         try:
-            yf_ticker = get_yahoo_symbol(raw_name) # Use Smart Engine here too
+            # Use the Yahoo Symbol (.NS) to get info
+            yf_ticker = f"{ticker}.NS"
             info = yf.Ticker(yf_ticker).info
             sector = info.get('sector', 'Others')
             
+            # Shorten Sector Names
             if sector == 'Financial Services': sector = 'FIN SERVICE'
             if sector == 'Technology': sector = 'IT'
             if sector == 'Consumer Cyclical': sector = 'AUTO' 
             if sector == 'Basic Materials': sector = 'METAL'
             
-            sector_map[raw_name] = sector.upper()
+            sector_map[ticker] = sector.upper()
         except:
-            sector_map[raw_name] = 'OTHERS'
+            sector_map[ticker] = 'OTHERS'
     return sector_map
 
 # --- MAIN APP UI ---
 
+# Sidebar
 with st.sidebar:
     selected = option_menu(
         menu_title="TradeFinder",
@@ -318,6 +374,7 @@ with st.sidebar:
     today_india = datetime.now(india_tz).date()
     selected_date = st.date_input("📅 Select Date", today_india)
 
+# 1. Market Pulse
 if selected == "Market Pulse":
     st.title("🚀 Market Pulse")
     df = load_data_from_dynamodb(selected_date)
@@ -332,11 +389,14 @@ if selected == "Market Pulse":
     else:
         df['Live_Price'] = 0.0
         df['Live_Move_Pct'] = 0.0
-        
-    # Generate Chart Links using Smart Tickers
-    # We strip .NS for TradingView because TV doesn't use it
-    df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df['Name'].apply(get_yahoo_symbol).str.replace('.NS','').str.replace('&', '_') # TV uses _ for & sometimes
-    df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + df['TV_Symbol']
+
+    # --- TRADINGVIEW LINK GENERATOR (PROTECTED) ---
+    if 'Name' in df.columns:
+        # 1. Get Clean Symbol
+        df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
+        # 2. Create TV Symbol (Replace & with _ for stocks like M&M)
+        df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df['Cleaned_Name'].str.replace('&', '_').str.replace(' ', '')
+        df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + df['TV_Symbol']
 
     col1, col2 = st.columns(2)
 
@@ -380,6 +440,7 @@ if selected == "Market Pulse":
             st.caption("No Bearish Signals yet.")
         st.markdown('</div>', unsafe_allow_html=True)
 
+# 2. Sector Scope
 elif selected == "Sector Scope":
     st.title("🏙️ Sector Scope")
     st.caption("Active Sectors based on alerts")
@@ -390,15 +451,18 @@ elif selected == "Sector Scope":
         st.stop()
 
     if 'Name' in df.columns:
-        unique_stocks = df['Name'].unique().tolist()
+        # Use Corrected Names for Sector Lookup too!
+        df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
+        unique_stocks = df['Cleaned_Name'].unique().tolist()
         
         with st.spinner(f"Mapping sectors for {len(unique_stocks)} stocks..."):
             sector_mapping = get_sector_map(unique_stocks)
         
-        df['Sector'] = df['Name'].map(sector_mapping)
+        df['Sector'] = df['Cleaned_Name'].map(sector_mapping)
         sector_counts = df['Sector'].value_counts().reset_index()
         sector_counts.columns = ['Sector', 'Count']
 
+        # GREEN BAR CHART
         chart = alt.Chart(sector_counts).mark_bar(
             color='#2ecc71',
             cornerRadiusTopLeft=5,
@@ -419,6 +483,3 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
-
-else:
-    st.write("Page under construction")
