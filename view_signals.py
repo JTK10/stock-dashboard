@@ -260,8 +260,6 @@ TICKER_CORRECTIONS = {
     "FSN E COMMERCE VENTURES LTD": "NYKAA",
     "FSN E COMMERCE VENTURES LIMITED": "NYKAA",
     "FSN E-COMMERCE VENTURES LTD": "NYKAA" # Note the hyphen
-
-
 }
 
 # --- 3. LOAD DATA FROM DYNAMODB ---
@@ -301,6 +299,7 @@ def load_data_from_dynamodb(target_date):
     elif 'Signal' in df.columns:
         df['Direction'] = df['Signal'].map({'LONG': 'LONG', 'SHORT': 'SHORT'})
 
+    # Ensure TargetPrice and TargetPct exist
     numeric_cols = ['SignalPrice', 'TargetPrice', 'TargetPct', 'RVOL', 'NetMovePct', 'RangeSoFarPct']
     for col in numeric_cols:
         if col not in df.columns: df[col] = 0.0
@@ -419,11 +418,14 @@ if selected == "Alpha Stream":
         bull_df = df[df['Direction'] == 'LONG'].copy()
         if not bull_df.empty:
             bull_df = bull_df.sort_values(by='Live_Move_Pct', ascending=False)
+            # ADDED TargetPrice and TargetPct here
             st.data_editor(
-                bull_df[['Chart', 'Name', 'Live_Move_Pct', 'Time', 'RVOL']], 
+                bull_df[['Chart', 'Name', 'Live_Move_Pct', 'TargetPrice', 'TargetPct', 'Time', 'RVOL']], 
                 column_config={
                     "Chart": st.column_config.LinkColumn("View", display_text="📈"),
                     "Live_Move_Pct": st.column_config.ProgressColumn("%", format="%.2f%%", min_value=-5, max_value=5),
+                    "TargetPrice": st.column_config.NumberColumn("Target ₹", format="%.2f"),
+                    "TargetPct": st.column_config.NumberColumn("Target %", format="%.2f%%"),
                     "Time": st.column_config.TextColumn("Entry Time"), 
                     "RVOL": st.column_config.NumberColumn("RVOL", format="%.2fx"),
                 },
@@ -439,11 +441,14 @@ if selected == "Alpha Stream":
         bear_df = df[df['Direction'] == 'SHORT'].copy()
         if not bear_df.empty:
             bear_df = bear_df.sort_values(by='Live_Move_Pct', ascending=True)
+            # ADDED TargetPrice and TargetPct here
             st.data_editor(
-                bear_df[['Chart', 'Name', 'Live_Move_Pct', 'Time', 'RVOL']], 
+                bear_df[['Chart', 'Name', 'Live_Move_Pct', 'TargetPrice', 'TargetPct', 'Time', 'RVOL']], 
                 column_config={
                     "Chart": st.column_config.LinkColumn("View", display_text="📉"),
                     "Live_Move_Pct": st.column_config.ProgressColumn("%", format="%.2f%%", min_value=-5, max_value=5),
+                    "TargetPrice": st.column_config.NumberColumn("Target ₹", format="%.2f"),
+                    "TargetPct": st.column_config.NumberColumn("Target %", format="%.2f%%"),
                     "Time": st.column_config.TextColumn("Entry Time"),
                     "RVOL": st.column_config.NumberColumn("RVOL", format="%.2fx"),
                 },
@@ -496,17 +501,3 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
