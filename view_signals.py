@@ -12,48 +12,77 @@ from streamlit_autorefresh import st_autorefresh
 from streamlit_option_menu import option_menu
 
 # --- 1. PAGE CONFIG & AUTO REFRESH ---
-st.set_page_config(page_title="SignalX", layout="wide", page_icon="🚀")
+# Changed browser icon to X to match brand
+st.set_page_config(page_title="SignalX", layout="wide", page_icon="✖️")
 count = st_autorefresh(interval=300 * 1000, key="datarefresh")
 
-# --- 2. CUSTOM CSS (MODERN UI) ---
+# --- 2. CUSTOM CSS (MODERN & POWERFUL UI) ---
 st.markdown("""
 <style>
+    /* Import modern font */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+
     /* Global Background & Font */
     .stApp {
-        background-color: #0e1117;
+        background-color: #080a0e; /* Deeper Midnight Background */
         font-family: 'Inter', sans-serif;
     }
-    
-    /* Custom Header Styles */
-    .header-bullish {
-        color: #00FF7F;
-        border-bottom: 2px solid #00FF7F;
-        padding-bottom: 10px;
-        margin-bottom: 15px;
-        font-size: 1.5rem;
-        font-weight: 600;
-        letter-spacing: 1px;
+
+    /* Targeting Streamlit containers that have borders (the cards) to give them a background */
+    [data-testid="stVerticalBlockBorderWrapper"] > div {
+        background-color: #131722; /* Distinct Card Background */
+        border-radius: 12px;
+        border: 1px solid #2a2e3a;
     }
-    
-    .header-bearish {
-        color: #FF4B4B;
-        border-bottom: 2px solid #FF4B4B;
-        padding-bottom: 10px;
+
+    /* Custom Header Styles for Tables */
+    .header-bullish {
+        color: #00FF7F; /* Neon Green */
+        background: linear-gradient(90deg, rgba(0,255,127,0.1) 0%, rgba(0,0,0,0) 100%);
+        border-left: 4px solid #00FF7F;
+        padding: 10px 15px;
         margin-bottom: 15px;
-        font-size: 1.5rem;
-        font-weight: 600;
+        font-size: 1.2rem;
+        font-weight: 800;
         letter-spacing: 1px;
+        text-transform: uppercase;
+        border-radius: 4px;
+    }
+
+    .header-bearish {
+        color: #FF4B4B; /* Soft Red */
+        background: linear-gradient(90deg, rgba(255,75,75,0.1) 0%, rgba(0,0,0,0) 100%);
+        border-left: 4px solid #FF4B4B;
+        padding: 10px 15px;
+        margin-bottom: 15px;
+        font-size: 1.2rem;
+        font-weight: 800;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        border-radius: 4px;
     }
 
     /* Metric Cards Styling */
     [data-testid="stMetricValue"] {
-        font-size: 2rem;
+        font-size: 2.2rem;
+        font-weight: 800;
+        color: #e0e0e0;
     }
-    
+    [data-testid="stMetricLabel"] {
+        font-size: 1rem;
+        color: #a0a0a0;
+    }
+
     /* Adjust spacing */
     .block-container {
         padding-top: 2rem;
-        padding-bottom: 2rem;
+        padding-bottom: 3rem;
+    }
+    
+    /* Sidebar tweaks */
+    [data-testid="stSidebar"] {
+        background-color: #0b0e14;
+        border-right: 1px solid #2a2e3a;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -406,6 +435,11 @@ with st.sidebar:
         icons=["activity", "grid"],
         menu_icon="cast",
         default_index=0,
+        styles={
+            "container": {"padding": "5!important", "background-color": "#0b0e14"},
+            "nav-link": {"font-size": "16px", "text-align": "left", "margin":"0px", "--hover-color": "#1e232e"},
+            "nav-link-selected": {"background-color": "#00C9FF"},
+        }
     )
     st.divider()
     india_tz = pytz.timezone('Asia/Kolkata')
@@ -414,11 +448,21 @@ with st.sidebar:
 
 # 1. SignalX
 if selected == "SignalX":
-    # Gradient Title
+    # --- CUSTOM SVG LOGO (BULL & BEAR X) ---
+    # This replaces the previous gradient text title.
+    # It draws a rising green arrow (bull) crossing a falling red arrow (bear).
     st.markdown("""
-        <h1 style='background: -webkit-linear-gradient(45deg, #00C9FF, #92FE9D); -webkit-background-clip: text; -webkit-text-fill-color: transparent;'>
-            🚀 SignalX
-        </h1>
+        <div style="text-align: left; margin-bottom: 20px;">
+            <svg width="350" height="80" viewBox="0 0 350 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M20 70 L 80 20 L 100 35 L 140 10" stroke="#00FF7F" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M140 10 L 125 12 M140 10 L 135 25" stroke="#00FF7F" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+                
+                <path d="M20 10 L 60 30 L 80 20 L 140 70" stroke="#FF4B4B" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M140 70 L 125 68 M140 70 L 135 55" stroke="#FF4B4B" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+                
+                <text x="160" y="55" fill="white" font-family="Inter, sans-serif" font-weight="800" font-size="48" letter-spacing="-1">SignalX</text>
+            </svg>
+        </div>
     """, unsafe_allow_html=True)
     
     df = load_data_from_dynamodb(selected_date)
@@ -459,22 +503,24 @@ if selected == "SignalX":
     # --- LEFT COL: BULLISH ---
     with col1:
         with st.container(border=True): # Uses native container with border (Card Style)
-            st.markdown('<div class="header-bullish">🟢 BULLISH BEACONS</div>', unsafe_allow_html=True)
+            st.markdown('<div class="header-bullish">🟢 Bullish Beacons</div>', unsafe_allow_html=True)
             bull_df = df[df['Direction'] == 'LONG'].copy()
             if not bull_df.empty:
                 bull_df = bull_df.sort_values(by='Live_Move_Pct', ascending=False)
                 st.data_editor(
                     bull_df[['Chart', 'Name', 'Live_Move_Pct', 'Time', 'RVOL']], 
                     column_config={
-                        "Chart": st.column_config.LinkColumn("View", display_text="📈"),
+                        "Chart": st.column_config.LinkColumn("View", display_text="📈", width="small"),
+                        "Name": st.column_config.TextColumn("Ticker", width="medium"),
                         "Live_Move_Pct": st.column_config.ProgressColumn(
                             "PnL %", 
                             format="%.2f%%", 
                             min_value=-5, 
                             max_value=5,
+                            width="medium"
                         ),
-                        "Time": st.column_config.TextColumn("Entry Time"), 
-                        "RVOL": st.column_config.NumberColumn("RVOL", format="%.2fx"),
+                        "Time": st.column_config.TextColumn("Time", width="small"), 
+                        "RVOL": st.column_config.NumberColumn("RVOL", format="%.1fx", width="small"),
                     },
                     hide_index=True, use_container_width=True, disabled=True, key="bull_table"
                 )
@@ -484,22 +530,24 @@ if selected == "SignalX":
     # --- RIGHT COL: BEARISH ---
     with col2:
         with st.container(border=True): # Uses native container with border (Card Style)
-            st.markdown('<div class="header-bearish">🔴 BEARISH DRAGONS</div>', unsafe_allow_html=True)
+            st.markdown('<div class="header-bearish">🔴 Bearish Dragons</div>', unsafe_allow_html=True)
             bear_df = df[df['Direction'] == 'SHORT'].copy()
             if not bear_df.empty:
                 bear_df = bear_df.sort_values(by='Live_Move_Pct', ascending=True)
                 st.data_editor(
                     bear_df[['Chart', 'Name', 'Live_Move_Pct', 'Time', 'RVOL']], 
                     column_config={
-                        "Chart": st.column_config.LinkColumn("View", display_text="📉"),
+                        "Chart": st.column_config.LinkColumn("View", display_text="📉", width="small"),
+                        "Name": st.column_config.TextColumn("Ticker", width="medium"),
                         "Live_Move_Pct": st.column_config.ProgressColumn(
                             "PnL %", 
                             format="%.2f%%", 
                             min_value=-5, 
                             max_value=5,
+                            width="medium"
                         ),
-                        "Time": st.column_config.TextColumn("Entry Time"),
-                        "RVOL": st.column_config.NumberColumn("RVOL", format="%.2fx"),
+                        "Time": st.column_config.TextColumn("Time", width="small"),
+                        "RVOL": st.column_config.NumberColumn("RVOL", format="%.1fx", width="small"),
                     },
                     hide_index=True, use_container_width=True, disabled=True, key="bear_table"
                 )
@@ -549,4 +597,3 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
-
