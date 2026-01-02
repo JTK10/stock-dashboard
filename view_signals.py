@@ -12,7 +12,7 @@ from streamlit_autorefresh import st_autorefresh
 from streamlit_option_menu import option_menu
 
 # --- 1. PAGE CONFIG & AUTO REFRESH ---
-st.set_page_config(page_title="Alpha Stream", layout="wide", page_icon="🚀")
+st.set_page_config(page_title="SignalX", layout="wide", page_icon="🚀")
 count = st_autorefresh(interval=300 * 1000, key="datarefresh")
 
 # --- 2. CUSTOM CSS (MODERN UI) ---
@@ -402,7 +402,7 @@ def get_sector_map(clean_ticker_list):
 with st.sidebar:
     selected = option_menu(
         menu_title="MENU",
-        options=["Alpha Stream", "Sector Scope"], 
+        options=["SignalX", "Sector Scope"], 
         icons=["activity", "grid"],
         menu_icon="cast",
         default_index=0,
@@ -412,12 +412,12 @@ with st.sidebar:
     today_india = datetime.now(india_tz).date()
     selected_date = st.date_input("📅 Select Date", today_india)
 
-# 1. Alpha Stream
-if selected == "Alpha Stream":
+# 1. SignalX
+if selected == "SignalX":
     # Gradient Title
     st.markdown("""
         <h1 style='background: -webkit-linear-gradient(45deg, #00C9FF, #92FE9D); -webkit-background-clip: text; -webkit-text-fill-color: transparent;'>
-            🚀 Alpha Stream
+            🚀 SignalX
         </h1>
     """, unsafe_allow_html=True)
     
@@ -549,3 +549,4 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
+
