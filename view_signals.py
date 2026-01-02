@@ -439,7 +439,7 @@ with st.sidebar:
             "container": {"padding": "5!important", "background-color": "#0b0e14"},
             "nav-link": {"font-size": "16px", "text-align": "left", "margin":"0px", "--hover-color": "#1e232e"},
             "nav-link-selected": {"background-color": "#00FF7F", "color": "black"}, # Changed to Neon Green
-        }
+        
         }
     )
     st.divider()
@@ -595,4 +595,5 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
+
 
