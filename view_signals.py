@@ -59,9 +59,11 @@ TICKER_CORRECTIONS = {
     "ASIAN PAINTS LIMITED": "ASIANPAINT",
     "DALMIA BHARAT LIMITED": "DALBHARAT",
     "BLUE STAR LIMITED": "BLUESTARCO",
-    "HINDALCO INDUSTRIES LTD": "HINDALCO INDUSTRIES",
+    "HINDALCO INDUSTRIES LTD": "HINDALCO",
     "360 ONE WAM LIMITED": "360ONE",
-    
+    "HINDALCO INDUSTRIES LTD": "HINDALCO",
+    "HINDALCO INDUSTRIES LIMITED": "HINDALCO",
+    "HINDALCO": "HINDALCO",
     # --- COMMON CORRECTIONS ---
     "PATANJALI FOODS LIMITED": "PATANJALI",
     "INDUSIND BANK LIMITED": "INDUSINDBK",
@@ -483,4 +485,5 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
+
 
