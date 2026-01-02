@@ -59,7 +59,7 @@ TICKER_CORRECTIONS = {
     "ASIAN PAINTS LIMITED": "ASIANPAINT",
     "DALMIA BHARAT LIMITED": "DALBHARAT",
     "BLUE STAR LIMITED": "BLUESTARCO",
-    "HINDALCO INDUSTRIES LTD": "HINDALCO",
+    "HINDALCO INDUSTRIES LTD": "HINDALCO INDUSTRIES",
     "360 ONE WAM LIMITED": "360ONE",
     
     # --- COMMON CORRECTIONS ---
@@ -363,8 +363,8 @@ def get_sector_map(clean_ticker_list):
 # Sidebar
 with st.sidebar:
     selected = option_menu(
-        menu_title="TradeFinder",
-        options=["Market Pulse", "Sector Scope"], 
+        menu_title="MENU",
+        options=["Alpha Stream", "Sector Scope"], 
         icons=["activity", "grid"],
         menu_icon="cast",
         default_index=0,
@@ -374,9 +374,9 @@ with st.sidebar:
     today_india = datetime.now(india_tz).date()
     selected_date = st.date_input("📅 Select Date", today_india)
 
-# 1. Market Pulse
-if selected == "Market Pulse":
-    st.title("🚀 Market Pulse")
+# 1. Alpha Stream
+if selected == "Alpha Stream":
+    st.title("🚀 Alpha Stream")
     df = load_data_from_dynamodb(selected_date)
     
     if df.empty:
@@ -483,3 +483,4 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
+
