@@ -252,7 +252,9 @@ TICKER_CORRECTIONS = {
     "MAX HEALTHCARE INS LTD": "MAXHEALTH",
     "MAZAGON DOCK SHIPBUIL LTD": "MAZDOCK",
     "TATA CHEMICALS LTD": "TATACHEM",
+    "PG ELECTROPLAST LIMITED": "PGEL",
     "HINDALCO  INDUSTRIES  LTD": "HINDALCO"
+    
 }
 
 # --- 3. LOAD DATA FROM DYNAMODB ---
@@ -487,6 +489,7 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
+
 
 
 
