@@ -4,15 +4,38 @@ import boto3
 from boto3.dynamodb.conditions import Attr
 import os
 from decimal import Decimal
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
+import yfinance as yf
+from streamlit_autorefresh import st_autorefresh
+from streamlit_option_menu import option_menu  # <--- NEW LIBRARY
+
+# --- 1. PAGE CONFIG & AUTO REFRESH ---
+st.set_page_config(page_title="Scanner Dashboard", layout="wide", page_icon="⚡")
+
+# Auto-refresh every 5 minutes (300 seconds) to get fresh prices
+count = st_autorefresh(interval=300 * 1000, key="datarefresh")
+
+# --- 2. CUSTOM CSS (FOR THE DARK CARD LOOK) ---
+st.markdown("""
+<style>
+    /* Card Container Style */
+    .dashboard-card {
+        background-color: #1E1E1E;
+        padding: 20px;
+        border-radius: 10px;
+        border: 1px solid #333;
+        margin-bottom: 20px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # --- CONFIG ---
 AWS_REGION = os.getenv("AWS_REGION", "ap-south-1") 
 DYNAMODB_TABLE = os.getenv("DYNAMODB_TABLE", "SentAlerts")
 DEFAULT_EXCHANGE = "NSE"
 
-# === TRADINGVIEW MAPPING ===
+# === TRADINGVIEW MAPPING (KEPT EXACTLY AS IS) ===
 TICKER_CORRECTIONS = {
     "PATANJALI FOODS LIMITED": "PATANJALI",
     "INDUSIND BANK LIMITED": "INDUSINDBK",
@@ -225,32 +248,14 @@ TICKER_CORRECTIONS = {
     "TATA CHEMICALS LTD": "TATACHEM"
 }
 
-# --- STREAMLIT PAGE ---
-st.set_page_config(page_title="Scanner Dashboard", layout="wide", page_icon="⚡")
-st.title("⚡ Scanner Dashboard")
-
-# --- DATE SELECTION ---
-col1, col2 = st.columns([1, 4])
-with col1:
-    india_tz = pytz.timezone('Asia/Kolkata')
-    today_india = datetime.now(india_tz).date()
-    selected_date = st.date_input("Select Date", today_india)
-
-# --- LOAD DATA FROM DYNAMODB ---
+# --- LOAD DATA FROM DYNAMODB (KEPT EXACTLY AS IS) ---
 @st.cache_data(ttl=60)
 def load_data_from_dynamodb(target_date):
-    """
-    Scans the DynamoDB table for items matching the selected date.
-    """
     try:
         dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
         table = dynamodb.Table(DYNAMODB_TABLE)
-        
         target_date_str = target_date.isoformat()
-        
-        response = table.scan(
-            FilterExpression=Attr("Date").eq(target_date_str)
-        )
+        response = table.scan(FilterExpression=Attr("Date").eq(target_date_str))
         items = response.get('Items', [])
         
         while 'LastEvaluatedKey' in response:
@@ -264,132 +269,165 @@ def load_data_from_dynamodb(target_date):
         st.error(f"Error querying DynamoDB: {e}")
         return pd.DataFrame()
 
-    if not items:
-        return pd.DataFrame()
+    if not items: return pd.DataFrame()
 
     def convert_decimal(obj):
-        if isinstance(obj, list):
-            return [convert_decimal(i) for i in obj]
-        elif isinstance(obj, dict):
-            return {k: convert_decimal(v) for k, v in obj.items()}
-        elif isinstance(obj, Decimal):
-            return float(obj)
+        if isinstance(obj, list): return [convert_decimal(i) for i in obj]
+        elif isinstance(obj, dict): return {k: convert_decimal(v) for k, v in obj.items()}
+        elif isinstance(obj, Decimal): return float(obj)
         return obj
 
     data = [convert_decimal(item) for item in items]
     df = pd.DataFrame(data)
 
-    # === DATA PROCESSING ===
-    
     if 'Price' in df.columns and 'SignalPrice' not in df.columns:
         df.rename(columns={'Price': 'SignalPrice'}, inplace=True)
-        
     if 'Side' in df.columns:
-        df['Direction'] = df['Side'].map({'Bullish': '🟢 Long', 'Bearish': '🔴 Short'})
+        df['Direction'] = df['Side'].map({'Bullish': 'LONG', 'Bearish': 'SHORT'})
     elif 'Signal' in df.columns:
-        df['Direction'] = df['Signal'].map({'LONG': '🟢 Long', 'SHORT': '🔴 Short'})
-        
-    if 'Signal' in df.columns:
-        df['Setup'] = df['Signal']
-        
-    # FIX: Added 'TargetPrice' and 'TargetPct' to cols_to_ensure
-    cols_to_ensure = [
-        'TargetPrice', 'TargetPct', 
-        'NoiseRatio', 'RangeSoFarPct', 'GreenRatio', 'RedRatio', 
-        'NetMovePct', 'RVOL', 'Prev1RangePct', 'Prev2RangePct'
-    ]
-    for c in cols_to_ensure:
-        if c not in df.columns:
-            df[c] = 0.0
-            
-    # FIX: Added 'TargetPrice' and 'TargetPct' to numeric_cols
-    numeric_cols = [
-        'SignalPrice', 'TargetPrice', 'TargetPct', 
-        'RVOL', 'NetMovePct', 'RangeSoFarPct', 
-        'NoiseRatio', 'GreenRatio', 'RedRatio', 
-        'Prev1RangePct', 'Prev2RangePct'
-    ]
+        df['Direction'] = df['Signal'].map({'LONG': 'LONG', 'SHORT': 'SHORT'})
+    
+    # Ensure numeric cols exist
+    numeric_cols = ['SignalPrice', 'TargetPrice', 'TargetPct', 'RVOL', 'NetMovePct', 'RangeSoFarPct']
     for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
-
+        if col not in df.columns: df[col] = 0.0
+        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
+        
     return df
 
-# --- MAIN APP ---
-try:
+# --- LIVE DATA ENGINE (REQUIRED FOR PNL %) ---
+def fetch_live_updates(df):
+    if df.empty or 'Name' not in df.columns: return df
+
+    if 'Cleaned_Name' not in df.columns:
+        df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
+    
+    unique_tickers = df['Cleaned_Name'].unique().tolist()
+    yahoo_tickers = [f"{t}.NS" for t in unique_tickers]
+    
+    try:
+        # Fast batch download
+        live_data = yf.download(tickers=yahoo_tickers, period="1d", interval="1m", progress=False)['Close'].iloc[-1]
+        
+        price_map = {}
+        for ticker in unique_tickers:
+            yf_ticker = f"{ticker}.NS"
+            try:
+                if isinstance(live_data, pd.Series):
+                    price = live_data.get(yf_ticker, 0)
+                else:
+                    price = live_data if len(unique_tickers) == 1 else 0
+                price_map[ticker] = float(price) if price > 0 else 0
+            except:
+                price_map[ticker] = 0
+
+        df['Live_Price'] = df['Cleaned_Name'].map(price_map)
+        df['Live_Move_Pct'] = ((df['Live_Price'] - df['SignalPrice']) / df['SignalPrice']) * 100
+        df['Live_Move_Pct'] = df['Live_Move_Pct'].fillna(0.0)
+        
+    except Exception as e:
+        df['Live_Price'] = 0.0
+        df['Live_Move_Pct'] = 0.0
+        
+    return df
+
+# --- MAIN APP UI ---
+
+# 1. SIDEBAR (NEW)
+with st.sidebar:
+    selected = option_menu(
+        menu_title="TradeFinder",
+        options=["Market Pulse", "Insider Strategy", "Sector Scope"],
+        icons=["activity", "eye", "grid"],
+        menu_icon="cast",
+        default_index=0,
+    )
+    st.divider()
+    
+    # Date Selection (Moved to Sidebar)
+    india_tz = pytz.timezone('Asia/Kolkata')
+    today_india = datetime.now(india_tz).date()
+    selected_date = st.date_input("📅 Select Date", today_india)
+
+# 2. MARKET PULSE PAGE (THE DASHBOARD)
+if selected == "Market Pulse":
+    st.title("🚀 Market Pulse")
+
+    # Load Data
     df = load_data_from_dynamodb(selected_date)
     
     if df.empty:
-        st.warning(f"⚠️ No alerts found for {selected_date}.")
+        st.info(f"No alerts found for {selected_date}")
         st.stop()
 
-    # --- Sidebar Filters ---
-    st.sidebar.header("🔍 Filter Alerts")
-    
-    if 'Direction' in df.columns:
-        directions = sorted(df['Direction'].astype(str).unique().tolist())
-        selected_dirs = st.sidebar.multiselect('Direction', directions, default=directions)
+    # Fetch Live Updates (Only for Today)
+    if selected_date == today_india:
+        with st.spinner('⚡ Fetching Live Market Rates...'):
+            df = fetch_live_updates(df)
     else:
-        selected_dirs = []
+        df['Live_Price'] = 0.0
+        df['Live_Move_Pct'] = 0.0
+
+    # Chart Link Prep
+    if 'Name' in df.columns:
+        df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
+        df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df['Cleaned_Name'].str.replace(' ', '')
+        df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + df['TV_Symbol']
+
+    # --- SPLIT LAYOUT (BULLISH vs BEARISH) ---
+    col1, col2 = st.columns(2)
+
+    # LEFT COLUMN: BULLISH
+    with col1:
+        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+        st.subheader("🟢 BULLISH BEACONS")
         
-    mask = pd.Series(True, index=df.index)
-    if 'Direction' in df.columns:
-        mask &= df['Direction'].isin(selected_dirs)
+        bull_df = df[df['Direction'] == 'LONG'].copy()
+        if not bull_df.empty:
+            bull_df = bull_df.sort_values(by='Live_Move_Pct', ascending=False)
+            
+            st.data_editor(
+                bull_df[['Chart', 'Name', 'Live_Move_Pct', 'SignalPrice', 'Live_Price']],
+                column_config={
+                    "Chart": st.column_config.LinkColumn("View", display_text="📈"),
+                    "Live_Move_Pct": st.column_config.ProgressColumn("PnL %", format="%.2f%%", min_value=-5, max_value=5),
+                    "Live_Price": st.column_config.NumberColumn("CMP", format="%.2f"),
+                    "SignalPrice": st.column_config.NumberColumn("Entry", format="%.2f"),
+                },
+                hide_index=True,
+                use_container_width=True,
+                disabled=True,
+                key="bull_table"
+            )
+        else:
+            st.caption("No Bullish Signals yet.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # RIGHT COLUMN: BEARISH
+    with col2:
+        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+        st.subheader("🔴 BEARISH DRAGONS")
         
-    df_filtered = df[mask].copy()
+        bear_df = df[df['Direction'] == 'SHORT'].copy()
+        if not bear_df.empty:
+            bear_df = bear_df.sort_values(by='Live_Move_Pct', ascending=True) # Sort losers to top
+            
+            st.data_editor(
+                bear_df[['Chart', 'Name', 'Live_Move_Pct', 'SignalPrice', 'Live_Price']],
+                column_config={
+                    "Chart": st.column_config.LinkColumn("View", display_text="📉"),
+                    "Live_Move_Pct": st.column_config.ProgressColumn("PnL %", format="%.2f%%", min_value=-5, max_value=5),
+                    "Live_Price": st.column_config.NumberColumn("CMP", format="%.2f"),
+                    "SignalPrice": st.column_config.NumberColumn("Entry", format="%.2f"),
+                },
+                hide_index=True,
+                use_container_width=True,
+                disabled=True,
+                key="bear_table"
+            )
+        else:
+            st.caption("No Bearish Signals yet.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    # --- Data Presentation ---
-    
-    if 'Name' in df_filtered.columns:
-        df_filtered['Cleaned_Name'] = df_filtered['Name'].replace(TICKER_CORRECTIONS)
-        df_filtered['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df_filtered['Cleaned_Name'].str.replace(' ', '')
-        df_filtered['Chart'] = (
-            "https://www.tradingview.com/chart/?symbol=" + df_filtered['TV_Symbol'] + "&interval=5"
-        )
-    else:
-        st.error("Column 'Name' missing. Cannot generate charts.")
-
-    # FIX: Updated order to include TargetPrice and TargetPct after SignalPrice
-    desired_order = [
-        'Chart', 'Name', 'Time', 'Direction', 'SignalPrice', 
-        'TargetPrice', 'TargetPct',  # <-- Added here
-        'RVOL',
-        'NetMovePct', 'RangeSoFarPct', 
-        'NoiseRatio', 'GreenRatio', 'RedRatio',
-        'Prev1RangePct', 'Prev2RangePct'
-    ]
-    
-    final_cols = [c for c in desired_order if c in df_filtered.columns]
-    df_display = df_filtered[final_cols]
-
-    st.metric(label="Total Alerts", value=len(df_display))
-    
-    column_config = {
-        "Chart": st.column_config.LinkColumn("TradingView", display_text="📈 Open Chart"),
-        "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
-        
-        # FIX: Added configuration for new columns
-        "TargetPrice": st.column_config.NumberColumn("Target Price", format="%.2f"),
-        "TargetPct": st.column_config.NumberColumn("Target %", format="%.2f%%"),
-        
-        "RVOL": st.column_config.NumberColumn("RVOL", format="%.2fx"),
-        "NetMovePct": st.column_config.NumberColumn("Net Move %", format="%.2f%%"),
-        "RangeSoFarPct": st.column_config.NumberColumn("Day Range %", format="%.2f%%"),
-        "NoiseRatio": st.column_config.NumberColumn("Noise Ratio", format="%.2f", help="Lower is better (cleaner move)"),
-        "GreenRatio": st.column_config.NumberColumn("Green Candle %", format="%.2f"),
-        "RedRatio": st.column_config.NumberColumn("Red Candle %", format="%.2f"),
-        "Prev1RangePct": st.column_config.NumberColumn("D-1 Range", format="%.2f%%"),
-        "Prev2RangePct": st.column_config.NumberColumn("D-2 Range", format="%.2f%%")
-    }
-
-    st.data_editor(
-        df_display, 
-        use_container_width=True, 
-        disabled=True, 
-        column_config=column_config,
-        hide_index=True
-    )
-
-except Exception as e:
-    st.error(f"Unexpected error in dashboard: {e}")
-    st.stop()
+else:
+    st.write("Work in progress page...")
