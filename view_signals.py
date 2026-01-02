@@ -64,6 +64,7 @@ TICKER_CORRECTIONS = {
     "HINDALCO INDUSTRIES LTD": "HINDALCO",
     "HINDALCO INDUSTRIES LIMITED": "HINDALCO",
     "HINDALCO": "HINDALCO",
+    "HINDALCO  INDUSTRIES  LTD": "HINDALCO"
     # --- COMMON CORRECTIONS ---
     "PATANJALI FOODS LIMITED": "PATANJALI",
     "INDUSIND BANK LIMITED": "INDUSINDBK",
@@ -251,6 +252,7 @@ TICKER_CORRECTIONS = {
     "MAX HEALTHCARE INS LTD": "MAXHEALTH",
     "MAZAGON DOCK SHIPBUIL LTD": "MAZDOCK",
     "TATA CHEMICALS LTD": "TATACHEM"
+    "HINDALCO  INDUSTRIES  LTD": "HINDALCO"
 }
 
 # --- 3. LOAD DATA FROM DYNAMODB ---
@@ -485,5 +487,6 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
+
 
 
