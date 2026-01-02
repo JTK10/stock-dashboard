@@ -2,3 +2,5 @@ streamlit
 pandas
 boto3
 streamlit-autorefresh
+streamlit-option-menu
+yfinance
