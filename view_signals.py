@@ -256,7 +256,7 @@ TICKER_CORRECTIONS = {
     "HINDALCO  INDUSTRIES  LTD": "HINDALCO",
     "BAJAJ HOLDINGS & INVS LTD": "BAJAJHLDNG",  # Matches "INVS" abbreviation
     "WAAREE ENERGIES LIMITED": "WAAREEENER",    # Maps to correct 10-char symbol
-    "SWIGGY LIMITED": "SWIGGY"           # Maps to standard symbol, 
+    "SWIGGY LIMITED": "SWIGGY",          # Maps to standard symbol, 
     "FSN E COMMERCE VENTURES LTD": "NYKAA",
     "FSN E COMMERCE VENTURES LIMITED": "NYKAA",
     "FSN E-COMMERCE VENTURES LTD": "NYKAA" # Note the hyphen
@@ -496,6 +496,7 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
+
 
 
 
