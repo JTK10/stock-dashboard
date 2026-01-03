@@ -11,14 +11,15 @@ import altair as alt
 from streamlit_autorefresh import st_autorefresh
 from streamlit_option_menu import option_menu
 
-# --- 1. PAGE CONFIG & AUTHENTICATION ---
+# --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="SignalX", layout="wide", page_icon="✖️")
 
-# --- USER AUTHENTICATION SYSTEM ---
-USERS = {"admin": "admin123", "trader": "signalx"} # CHANGE THESE PASSWORDS
+# --- USER AUTHENTICATION (DISABLED) ---
+# To re-enable, just uncomment the last line 'login_gate()'
+USERS = {"admin": "admin123", "trader": "signalx"} 
 
 if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
+    st.session_state.authenticated = True # Default to True for now
 
 def login_gate():
     if not st.session_state.authenticated:
@@ -36,12 +37,12 @@ def login_gate():
                     st.error("❌ Invalid credentials")
         st.stop()
 
-login_gate()
+# login_gate()  <-- DISABLED FOR NOW
 
 # --- AUTO REFRESH ---
 count = st_autorefresh(interval=300 * 1000, key="datarefresh")
 
-# --- 2. CUSTOM CSS (MODERN & POWERFUL UI) ---
+# --- 2. CUSTOM CSS ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
@@ -336,6 +337,74 @@ TICKER_CORRECTIONS = {
     "FSN E-COMMERCE VENTURES LTD": "NYKAA"
 }
 
+# === STATIC SECTOR MAPPING (NO API CALLS) ===
+STATIC_SECTORS = {
+    # FIN SERVICE
+    "HDFCBANK": "FIN SERVICE", "ICICIBANK": "FIN SERVICE", "AXISBANK": "FIN SERVICE", "KOTAKBANK": "FIN SERVICE",
+    "SBIN": "FIN SERVICE", "BAJFINANCE": "FIN SERVICE", "BAJAJFINSV": "FIN SERVICE", "LICHSGFIN": "FIN SERVICE",
+    "PFC": "FIN SERVICE", "RECLTD": "FIN SERVICE", "SBILIFE": "FIN SERVICE", "HDFCLIFE": "FIN SERVICE",
+    "ICICIPRULI": "FIN SERVICE", "CHOLAFIN": "FIN SERVICE", "MUTHOOTFIN": "FIN SERVICE", "LICI": "FIN SERVICE",
+    "JIOFIN": "FIN SERVICE", "ABCAPITAL": "FIN SERVICE", "LTF": "FIN SERVICE", "BANDHANBNK": "FIN SERVICE",
+    "BANKBARODA": "FIN SERVICE", "PNB": "FIN SERVICE", "CANBK": "FIN SERVICE", "INDUSINDBK": "FIN SERVICE",
+    "IDFCFIRSTB": "FIN SERVICE", "AUBANK": "FIN SERVICE", "SHRIRAMFIN": "FIN SERVICE", "CDSL": "FIN SERVICE",
+    "CAMS": "FIN SERVICE", "ANGELONE": "FIN SERVICE", "MCX": "FIN SERVICE", "BSE": "FIN SERVICE",
+    "PAYTM": "FIN SERVICE", "POLICYBZR": "FIN SERVICE", "KFINTECH": "FIN SERVICE", "NUVAMA": "FIN SERVICE",
+    "MFSL": "FIN SERVICE", "ICICIGI": "FIN SERVICE", "SBICARD": "FIN SERVICE", "MANAPPURAM": "FIN SERVICE",
+    "IIFL": "FIN SERVICE", "RBLBANK": "FIN SERVICE", "YESBANK": "FIN SERVICE", "INDIANB": "FIN SERVICE",
+    "BANKINDIA": "FIN SERVICE", "HUDCO": "FIN SERVICE", "IRFC": "FIN SERVICE", "SAMMAANCAP": "FIN SERVICE",
+
+    # IT
+    "TCS": "IT", "INFY": "IT", "HCLTECH": "IT", "WIPRO": "IT", "TECHM": "IT", "LTIM": "IT",
+    "PERSISTENT": "IT", "COFORGE": "IT", "MPHASIS": "IT", "LTTS": "IT", "TATAELXSI": "IT",
+    "OFSS": "IT", "KPITTECH": "IT", "CYIENT": "IT", "SONACOMS": "IT", "NAUKRI": "IT",
+
+    # AUTO
+    "TATAMOTORS": "AUTO", "MARUTI": "AUTO", "M&M": "AUTO", "BAJAJ-AUTO": "AUTO", "EICHERMOT": "AUTO",
+    "HEROMOTOCO": "AUTO", "TVSMOTOR": "AUTO", "ASHOKLEY": "AUTO", "BHARATFORG": "AUTO", "BALKRISIND": "AUTO",
+    "MRF": "AUTO", "APOLLOTYRE": "AUTO", "MOTHERSON": "AUTO", "BOSCHLTD": "AUTO", "UNOMINDA": "AUTO",
+    "TIINDIA": "AUTO", "EXIDEIND": "AUTO",
+
+    # METAL & MINING
+    "TATASTEEL": "METAL", "HINDALCO": "METAL", "JSWSTEEL": "METAL", "VEDL": "METAL", "COALINDIA": "METAL",
+    "HINDZINC": "METAL", "NMDC": "METAL", "SAIL": "METAL", "JINDALSTEL": "METAL", "NATIONALUM": "METAL",
+    "APLAPOLLO": "METAL", "RATNAMANI": "METAL",
+
+    # ENERGY & POWER
+    "RELIANCE": "ENERGY", "NTPC": "ENERGY", "POWERGRID": "ENERGY", "ONGC": "ENERGY", "BPCL": "ENERGY",
+    "IOC": "ENERGY", "TATAPOWER": "ENERGY", "ADANIGREEN": "ENERGY", "ADANIENT": "ENERGY", "ADANIPORTS": "ENERGY",
+    "ADANIENSOL": "ENERGY", "JSWENERGY": "ENERGY", "NHPC": "ENERGY", "SJVN": "ENERGY", "TORNTPOWER": "ENERGY",
+    "SUZLON": "ENERGY", "INOXWIND": "ENERGY", "IEX": "ENERGY", "IREDA": "ENERGY", "OIL": "ENERGY",
+    "GAIL": "ENERGY", "PETRONET": "ENERGY", "IGL": "ENERGY", "MGL": "ENERGY", "SOLARINDS": "ENERGY",
+
+    # PHARMA
+    "SUNPHARMA": "PHARMA", "CIPLA": "PHARMA", "DRREDDY": "PHARMA", "DIVISLAB": "PHARMA", "APOLLOHOSP": "PHARMA",
+    "MAXHEALTH": "PHARMA", "TORNTPHARM": "PHARMA", "MANKIND": "PHARMA", "LUPIN": "PHARMA", "ZYDUSLIFE": "PHARMA",
+    "AUROPHARMA": "PHARMA", "ALKEM": "PHARMA", "BIOCON": "PHARMA", "SYNGENE": "PHARMA", "LAURUSLABS": "PHARMA",
+    "GLENMARK": "PHARMA", "PPLPHARMA": "PHARMA", "FORTIS": "PHARMA",
+
+    # FMCG & CONSUMER
+    "ITC": "FMCG", "HINDUNILVR": "FMCG", "NESTLEIND": "FMCG", "BRITANNIA": "FMCG", "TATACONSUM": "FMCG",
+    "TITAN": "FMCG", "ASIANPAINT": "FMCG", "BERGEPAINT": "FMCG", "PIDILITIND": "FMCG", "GODREJCP": "FMCG",
+    "DABUR": "FMCG", "MARICO": "FMCG", "COLPAL": "FMCG", "VBL": "FMCG", "UNITDSPR": "FMCG", "UBL": "FMCG",
+    "PATANJALI": "FMCG", "PAGEIND": "FMCG", "TRENT": "FMCG", "DMART": "FMCG", "NYKAA": "FMCG",
+    "ZOMATO": "FMCG", "SWIGGY": "FMCG", "HAVELLS": "FMCG", "VOLTAS": "FMCG", "BLUESTARCO": "FMCG",
+    "CROMPTON": "FMCG", "DIXON": "FMCG", "AMBER": "FMCG", "PGEL": "FMCG", "KALYANKJIL": "FMCG",
+
+    # INFRA & REALTY
+    "LT": "INFRA", "DLF": "REALTY", "LODHA": "REALTY", "GODREJPROP": "REALTY", "OBEROIRLTY": "REALTY",
+    "PHOENIXLTD": "REALTY", "PRESTIGE": "REALTY", "NBCC": "INFRA", "NCC": "INFRA", "RVNL": "INFRA",
+    "TITAGARH": "INFRA", "CONCOR": "INFRA", "IRCTC": "INFRA", "GMRINFRA": "INFRA", "GMRAIRPORT": "INFRA",
+    "INDHOTEL": "INFRA", "ULTRACEMCO": "INFRA", "GRASIM": "INFRA", "AMBUJACEM": "INFRA", "SHREECEM": "INFRA",
+    "DALBHARAT": "INFRA", "ACC": "INFRA", "ASTRAL": "INFRA", "POLYCAB": "INFRA", "SUPREMEIND": "INFRA",
+    "KEI": "INFRA",
+
+    # DEFENCE & OTHERS
+    "HAL": "DEFENCE", "BEL": "DEFENCE", "MAZDOCK": "DEFENCE", "COCHINSHIP": "DEFENCE", "BDL": "DEFENCE",
+    "BHEL": "INFRA", "ABB": "INFRA", "SIEMENS": "INFRA", "CGPOWER": "INFRA", "CUMMINSIND": "INFRA",
+    "PIIND": "CHEM", "SRF": "CHEM", "TATACHEM": "CHEM", "UPL": "CHEM", "COROMANDEL": "CHEM",
+    "INDUSTOWER": "TELECOM", "BHARTIARTL": "TELECOM", "IDEA": "TELECOM",
+}
+
 # --- 3. LOAD DATA FROM DYNAMODB ---
 @st.cache_data(ttl=60)
 def load_data_from_dynamodb(target_date):
@@ -438,11 +507,17 @@ def fetch_live_updates(df, target_date):
         
     return df
 
-# --- 5. SECTOR FETCHING HELPER ---
+# --- 5. SECTOR FETCHING HELPER (UPDATED) ---
 @st.cache_data(show_spinner=False)
 def get_sector_map(clean_ticker_list):
     sector_map = {}
     for ticker in clean_ticker_list:
+        # 1. CHECK STATIC MAP FIRST (Instant)
+        if ticker in STATIC_SECTORS:
+            sector_map[ticker] = STATIC_SECTORS[ticker]
+            continue
+            
+        # 2. FALLBACK TO YAHOO (Only if unknown)
         try:
             yf_ticker = f"{ticker}.NS"
             info = yf.Ticker(yf_ticker).info
@@ -480,9 +555,10 @@ with st.sidebar:
     selected_date = st.date_input("📅 Select Date", today_india)
     
     st.divider()
-    if st.button("🔒 Logout"):
-        st.session_state.authenticated = False
-        st.rerun()
+    # Logout button hidden since auth is disabled
+    # if st.button("🔒 Logout"):
+    #     st.session_state.authenticated = False
+    #     st.rerun()
 
 # 1. SignalX
 if selected == "SignalX":
