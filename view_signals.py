@@ -369,31 +369,70 @@ from datetime import timedelta # Make sure to import timedelta at the top if not
 def fetch_live_updates(df, target_date):
     if df.empty or 'Name' not in df.columns: return df
 
-    # 1. Clean Names using the Dictionary
+    # 1. Clean Names & Prepare Tickers
     df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
-    
-    # 2. Prepare Yahoo Tickers (Append .NS)
     unique_tickers = df['Cleaned_Name'].unique().tolist()
     yahoo_tickers = [f"{t}.NS" for t in unique_tickers]
     
-    # 3. Check if we need Live Data (Today) or Historical (Past)
+    # 2. Determine Date Mode
     india_tz = pytz.timezone('Asia/Kolkata')
     is_today = target_date == datetime.now(india_tz).date()
     
     try:
         if is_today:
-            # --- LIVE MODE: Intraday 1-minute data ---
+            # LIVE MODE
             data = yf.download(tickers=yahoo_tickers, period="1d", interval="1m", progress=False)
+            # Use the absolute last available price
+            if not data.empty and 'Close' in data:
+                final_prices = data['Close'].iloc[-1]
+            else:
+                return df
         else:
-            # --- HISTORY MODE: Daily Close for that specific date ---
-            # Yahoo Finance 'end' date is exclusive, so we add 1 day
+            # HISTORY MODE (Specific Past Day)
+            # We must set end date to target + 1 day because Yahoo 'end' is exclusive
             start_dt = target_date
             end_dt = target_date + timedelta(days=1)
+            
             data = yf.download(tickers=yahoo_tickers, start=start_dt, end=end_dt, interval="1d", progress=False)
+            
+            # If data is empty (e.g., Weekend/Holiday), return existing df
+            if data.empty or 'Close' not in data:
+                # Optional: You could try fetching the previous Friday if it's a weekend
+                return df
+                
+            # For history, the "Close" is the only row we have
+            final_prices = data['Close'].iloc[-1]
 
-        # Handle Empty Data (e.g., Holidays or Weekends)
-        if data.empty or 'Close' not in data:
-            return df
+        # 3. Map Prices to DataFrame
+        # Helper to safely extract price from the complex Yahoo result
+        def get_price(ticker, price_series):
+            yf_ticker = f"{ticker}.NS"
+            try:
+                # Case A: Multiple Tickers (Series with Index)
+                if isinstance(price_series, pd.Series):
+                    if yf_ticker in price_series.index:
+                        return float(price_series[yf_ticker])
+                
+                # Case B: Single Ticker (Scalar or Single-Item Series)
+                # If we only requested 1 stock, price_series might be just that float value
+                if len(unique_tickers) == 1:
+                     # Check if it's a series or scalar
+                    if isinstance(price_series, pd.Series):
+                        return float(price_series.iloc[0])
+                    return float(price_series)
+                    
+                return 0.0
+            except:
+                return 0.0
+
+        df['Live_Price'] = df['Cleaned_Name'].apply(lambda x: get_price(x, final_prices))
+
+    except Exception as e:
+        print(f"Error fetching data: {e}")
+        # Keep old prices if fetch fails
+        df['Live_Price'] = df['Live_Price'] if 'Live_Price' in df.columns else 0.0
+        
+    return df
             
         # Extract the last available price (Current price for today, Close price for history)
         # Handle single ticker vs multiple ticker return structure
@@ -521,11 +560,20 @@ if selected == "SignalX":
         st.stop()
 
     if selected_date == today_india:
-       with st.spinner(f'⚡ Fetching Market Data for {selected_date}...'):
+       with st.spinner(f'⚡ Fetching Prices for {selected_date}...'):
+        # 1. Fetch the data (Live if today, Historical Close if past)
         df = fetch_live_updates(df, selected_date)
-    else:
-        df['Live_Price'] = 0.0
-        df['Live_Move_Pct'] = 0.0
+        
+        # 2. FORCE PnL Calculation here to ensure it updates
+        # Ensure columns are numeric to prevent errors
+        df['SignalPrice'] = pd.to_numeric(df['SignalPrice'], errors='coerce')
+        df['Live_Price'] = pd.to_numeric(df['Live_Price'], errors='coerce')
+        
+        # Calculate PnL: (Current - Entry) / Entry * 100
+        df['Live_Move_Pct'] = ((df['Live_Price'] - df['SignalPrice']) / df['SignalPrice']) * 100
+        
+        # Fill NaNs with 0 (for stocks that couldn't be fetched)
+        df['Live_Move_Pct'] = df['Live_Move_Pct'].fillna(0.0)
 
     # --- TRADINGVIEW LINK GENERATOR ---
     if 'Name' in df.columns:
@@ -646,6 +694,7 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
+
 
 
 
