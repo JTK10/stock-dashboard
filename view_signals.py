@@ -363,8 +363,10 @@ def load_data_from_dynamodb(target_date):
     
     return df
 
-# --- 4. LIVE DATA ENGINE (YAHOO) ---
-def fetch_live_updates(df):
+from datetime import timedelta # Make sure to import timedelta at the top if not present
+
+# --- 4. LIVE & HISTORICAL DATA ENGINE ---
+def fetch_live_updates(df, target_date):
     if df.empty or 'Name' not in df.columns: return df
 
     # 1. Clean Names using the Dictionary
@@ -374,18 +376,48 @@ def fetch_live_updates(df):
     unique_tickers = df['Cleaned_Name'].unique().tolist()
     yahoo_tickers = [f"{t}.NS" for t in unique_tickers]
     
+    # 3. Check if we need Live Data (Today) or Historical (Past)
+    india_tz = pytz.timezone('Asia/Kolkata')
+    is_today = target_date == datetime.now(india_tz).date()
+    
     try:
-        # Fast batch download
-        live_data = yf.download(tickers=yahoo_tickers, period="1d", interval="1m", progress=False)['Close'].iloc[-1]
-        
+        if is_today:
+            # --- LIVE MODE: Intraday 1-minute data ---
+            data = yf.download(tickers=yahoo_tickers, period="1d", interval="1m", progress=False)
+        else:
+            # --- HISTORY MODE: Daily Close for that specific date ---
+            # Yahoo Finance 'end' date is exclusive, so we add 1 day
+            start_dt = target_date
+            end_dt = target_date + timedelta(days=1)
+            data = yf.download(tickers=yahoo_tickers, start=start_dt, end=end_dt, interval="1d", progress=False)
+
+        # Handle Empty Data (e.g., Holidays or Weekends)
+        if data.empty or 'Close' not in data:
+            return df
+            
+        # Extract the last available price (Current price for today, Close price for history)
+        # Handle single ticker vs multiple ticker return structure
+        close_data = data['Close']
+        if not close_data.empty:
+            final_prices = close_data.iloc[-1] # Get the last row (latest price)
+        else:
+            final_prices = pd.Series()
+
         price_map = {}
         for ticker in unique_tickers:
             yf_ticker = f"{ticker}.NS"
             try:
-                if isinstance(live_data, pd.Series):
-                    price = live_data.get(yf_ticker, 0)
+                # Handle MultiIndex (multiple tickers) vs Series (single ticker)
+                if isinstance(final_prices, pd.Series):
+                    # If multiple tickers downloaded, final_prices is a Series with ticker index
+                    if yf_ticker in final_prices.index:
+                        price = final_prices[yf_ticker]
+                    else:
+                         # If only 1 ticker was downloaded, final_prices might be a scalar or single value
+                        price = final_prices.iloc[0] if len(unique_tickers) == 1 else 0
                 else:
-                    price = live_data if len(unique_tickers) == 1 else 0
+                    price = final_prices
+
                 price_map[ticker] = float(price) if price > 0 else 0
             except:
                 price_map[ticker] = 0
@@ -398,6 +430,7 @@ def fetch_live_updates(df):
         df['Live_Move_Pct'] = df['Live_Move_Pct'].fillna(0.0)
         
     except Exception as e:
+        st.error(f"Data Fetch Error: {e}")
         df['Live_Price'] = 0.0
         df['Live_Move_Pct'] = 0.0
         
@@ -488,8 +521,8 @@ if selected == "SignalX":
         st.stop()
 
     if selected_date == today_india:
-        with st.spinner('⚡ Fetching Live Market Rates...'):
-            df = fetch_live_updates(df)
+       with st.spinner(f'⚡ Fetching Market Data for {selected_date}...'):
+        df = fetch_live_updates(df, selected_date)
     else:
         df['Live_Price'] = 0.0
         df['Live_Move_Pct'] = 0.0
@@ -613,6 +646,7 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
+
 
 
 
