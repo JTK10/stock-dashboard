@@ -4,40 +4,61 @@ import boto3
 from boto3.dynamodb.conditions import Attr
 import os
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 import yfinance as yf
 import altair as alt
 from streamlit_autorefresh import st_autorefresh
 from streamlit_option_menu import option_menu
 
-# --- 1. PAGE CONFIG & AUTO REFRESH ---
-# Changed browser icon to X to match brand
+# --- 1. PAGE CONFIG & AUTHENTICATION ---
 st.set_page_config(page_title="SignalX", layout="wide", page_icon="✖️")
+
+# --- USER AUTHENTICATION SYSTEM ---
+USERS = {"admin": "admin123", "trader": "signalx"} # CHANGE THESE PASSWORDS
+
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+
+def login_gate():
+    if not st.session_state.authenticated:
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.markdown("## 🔐 Access SignalX")
+            st.info("Please log in to access the Alpha Stream.")
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            if st.button("Log In", type="primary", use_container_width=True):
+                if username in USERS and USERS[username] == password:
+                    st.session_state.authenticated = True
+                    st.rerun()
+                else:
+                    st.error("❌ Invalid credentials")
+        st.stop()
+
+login_gate()
+
+# --- AUTO REFRESH ---
 count = st_autorefresh(interval=300 * 1000, key="datarefresh")
 
 # --- 2. CUSTOM CSS (MODERN & POWERFUL UI) ---
 st.markdown("""
 <style>
-    /* Import modern font */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
 
-    /* Global Background & Font */
     .stApp {
-        background-color: #080a0e; /* Deeper Midnight Background */
+        background-color: #080a0e;
         font-family: 'Inter', sans-serif;
     }
 
-    /* Targeting Streamlit containers that have borders (the cards) to give them a background */
     [data-testid="stVerticalBlockBorderWrapper"] > div {
-        background-color: #131722; /* Distinct Card Background */
+        background-color: #131722;
         border-radius: 12px;
         border: 1px solid #2a2e3a;
     }
 
-    /* Custom Header Styles for Tables */
     .header-bullish {
-        color: #00FF7F; /* Neon Green */
+        color: #00FF7F;
         background: linear-gradient(90deg, rgba(0,255,127,0.1) 0%, rgba(0,0,0,0) 100%);
         border-left: 4px solid #00FF7F;
         padding: 10px 15px;
@@ -50,7 +71,7 @@ st.markdown("""
     }
 
     .header-bearish {
-        color: #FF4B4B; /* Soft Red */
+        color: #FF4B4B;
         background: linear-gradient(90deg, rgba(255,75,75,0.1) 0%, rgba(0,0,0,0) 100%);
         border-left: 4px solid #FF4B4B;
         padding: 10px 15px;
@@ -62,7 +83,6 @@ st.markdown("""
         border-radius: 4px;
     }
 
-    /* Metric Cards Styling */
     [data-testid="stMetricValue"] {
         font-size: 2.2rem;
         font-weight: 800;
@@ -73,13 +93,11 @@ st.markdown("""
         color: #a0a0a0;
     }
 
-    /* Adjust spacing */
     .block-container {
         padding-top: 2rem;
         padding-bottom: 3rem;
     }
     
-    /* Sidebar tweaks */
     [data-testid="stSidebar"] {
         background-color: #0b0e14;
         border-right: 1px solid #2a2e3a;
@@ -94,7 +112,6 @@ DEFAULT_EXCHANGE = "NSE"
 
 # === TRADINGVIEW & YAHOO MAPPING ===
 TICKER_CORRECTIONS = {
-    # ... (Keep your existing dictionary exactly as is) ...
     "LIC HOUSING FINANCE LTD": "LICHSGFIN",
     "INOX WIND LIMITED": "INOXWIND",
     "HINDUSTAN ZINC LIMITED": "HINDZINC",
@@ -363,11 +380,10 @@ def load_data_from_dynamodb(target_date):
     
     return df
 
-from datetime import timedelta # Make sure to import timedelta at the top if not present
-
 # --- 4. LIVE & HISTORICAL DATA ENGINE ---
 def fetch_live_updates(df, target_date):
-    if df.empty or 'Name' not in df.columns: return df
+    if df.empty or 'Name' not in df.columns: 
+        return df
 
     # 1. Clean Names & Prepare Tickers
     df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
@@ -382,41 +398,30 @@ def fetch_live_updates(df, target_date):
         if is_today:
             # LIVE MODE
             data = yf.download(tickers=yahoo_tickers, period="1d", interval="1m", progress=False)
-            # Use the absolute last available price
             if not data.empty and 'Close' in data:
                 final_prices = data['Close'].iloc[-1]
             else:
                 return df
         else:
-            # HISTORY MODE (Specific Past Day)
-            # We must set end date to target + 1 day because Yahoo 'end' is exclusive
+            # HISTORY MODE
             start_dt = target_date
             end_dt = target_date + timedelta(days=1)
-            
             data = yf.download(tickers=yahoo_tickers, start=start_dt, end=end_dt, interval="1d", progress=False)
             
-            # If data is empty (e.g., Weekend/Holiday), return existing df
             if data.empty or 'Close' not in data:
-                # Optional: You could try fetching the previous Friday if it's a weekend
                 return df
-                
-            # For history, the "Close" is the only row we have
+            
             final_prices = data['Close'].iloc[-1]
 
-        # 3. Map Prices to DataFrame
-        # Helper to safely extract price from the complex Yahoo result
+        # 3. Map Prices
         def get_price(ticker, price_series):
             yf_ticker = f"{ticker}.NS"
             try:
-                # Case A: Multiple Tickers (Series with Index)
                 if isinstance(price_series, pd.Series):
                     if yf_ticker in price_series.index:
                         return float(price_series[yf_ticker])
                 
-                # Case B: Single Ticker (Scalar or Single-Item Series)
-                # If we only requested 1 stock, price_series might be just that float value
                 if len(unique_tickers) == 1:
-                     # Check if it's a series or scalar
                     if isinstance(price_series, pd.Series):
                         return float(price_series.iloc[0])
                     return float(price_series)
@@ -429,49 +434,7 @@ def fetch_live_updates(df, target_date):
 
     except Exception as e:
         print(f"Error fetching data: {e}")
-        # Keep old prices if fetch fails
         df['Live_Price'] = df['Live_Price'] if 'Live_Price' in df.columns else 0.0
-        
-    return df
-            
-        # Extract the last available price (Current price for today, Close price for history)
-        # Handle single ticker vs multiple ticker return structure
-        close_data = data['Close']
-        if not close_data.empty:
-            final_prices = close_data.iloc[-1] # Get the last row (latest price)
-        else:
-            final_prices = pd.Series()
-
-        price_map = {}
-        for ticker in unique_tickers:
-            yf_ticker = f"{ticker}.NS"
-            try:
-                # Handle MultiIndex (multiple tickers) vs Series (single ticker)
-                if isinstance(final_prices, pd.Series):
-                    # If multiple tickers downloaded, final_prices is a Series with ticker index
-                    if yf_ticker in final_prices.index:
-                        price = final_prices[yf_ticker]
-                    else:
-                         # If only 1 ticker was downloaded, final_prices might be a scalar or single value
-                        price = final_prices.iloc[0] if len(unique_tickers) == 1 else 0
-                else:
-                    price = final_prices
-
-                price_map[ticker] = float(price) if price > 0 else 0
-            except:
-                price_map[ticker] = 0
-
-        # Map back to DataFrame
-        df['Live_Price'] = df['Cleaned_Name'].map(price_map)
-        
-        # Calc PnL
-        df['Live_Move_Pct'] = ((df['Live_Price'] - df['SignalPrice']) / df['SignalPrice']) * 100
-        df['Live_Move_Pct'] = df['Live_Move_Pct'].fillna(0.0)
-        
-    except Exception as e:
-        st.error(f"Data Fetch Error: {e}")
-        df['Live_Price'] = 0.0
-        df['Live_Move_Pct'] = 0.0
         
     return df
 
@@ -481,12 +444,10 @@ def get_sector_map(clean_ticker_list):
     sector_map = {}
     for ticker in clean_ticker_list:
         try:
-            # Use the Yahoo Symbol (.NS) to get info
             yf_ticker = f"{ticker}.NS"
             info = yf.Ticker(yf_ticker).info
             sector = info.get('sector', 'Others')
             
-            # Shorten Sector Names
             if sector == 'Financial Services': sector = 'FIN SERVICE'
             if sector == 'Technology': sector = 'IT'
             if sector == 'Consumer Cyclical': sector = 'AUTO' 
@@ -510,18 +471,22 @@ with st.sidebar:
         styles={
             "container": {"padding": "5!important", "background-color": "#0b0e14"},
             "nav-link": {"font-size": "16px", "text-align": "left", "margin":"0px", "--hover-color": "#1e232e"},
-            "nav-link-selected": {"background-color": "#00FF7F", "color": "black"}, # Changed to Neon Green
-        
+            "nav-link-selected": {"background-color": "#00FF7F", "color": "black"},
         }
     )
     st.divider()
     india_tz = pytz.timezone('Asia/Kolkata')
     today_india = datetime.now(india_tz).date()
     selected_date = st.date_input("📅 Select Date", today_india)
+    
+    st.divider()
+    if st.button("🔒 Logout"):
+        st.session_state.authenticated = False
+        st.rerun()
 
 # 1. SignalX
 if selected == "SignalX":
-  # --- CUSTOM SVG LOGO: SAMPLE 4 RECREATION (FIXED INDENTATION) ---
+    # --- CUSTOM SVG LOGO ---
     st.markdown("""
 <div style="text-align: left; margin-bottom: 25px; padding-left: 10px;">
 <svg width="400" height="70" viewBox="0 0 400 70" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -553,26 +518,23 @@ if selected == "SignalX":
 </svg>
 </div>
 """, unsafe_allow_html=True)
+
     df = load_data_from_dynamodb(selected_date)
     
     if df.empty:
         st.info(f"No alerts found for {selected_date}")
         st.stop()
 
-    if selected_date == today_india:
-       with st.spinner(f'⚡ Fetching Prices for {selected_date}...'):
-        # 1. Fetch the data (Live if today, Historical Close if past)
+    # --- MAIN DATA FETCHING LOOP ---
+    with st.spinner(f'⚡ Fetching Prices for {selected_date}...'):
         df = fetch_live_updates(df, selected_date)
         
-        # 2. FORCE PnL Calculation here to ensure it updates
-        # Ensure columns are numeric to prevent errors
+        # Ensure columns are numeric
         df['SignalPrice'] = pd.to_numeric(df['SignalPrice'], errors='coerce')
         df['Live_Price'] = pd.to_numeric(df['Live_Price'], errors='coerce')
         
-        # Calculate PnL: (Current - Entry) / Entry * 100
+        # FORCE PnL Calculation
         df['Live_Move_Pct'] = ((df['Live_Price'] - df['SignalPrice']) / df['SignalPrice']) * 100
-        
-        # Fill NaNs with 0 (for stocks that couldn't be fetched)
         df['Live_Move_Pct'] = df['Live_Move_Pct'].fillna(0.0)
 
     # --- TRADINGVIEW LINK GENERATOR ---
@@ -599,7 +561,7 @@ if selected == "SignalX":
 
     # --- LEFT COL: BULLISH ---
     with col1:
-        with st.container(border=True): # Uses native container with border (Card Style)
+        with st.container(border=True):
             st.markdown('<div class="header-bullish">🟢 Bullish Beacons</div>', unsafe_allow_html=True)
             bull_df = df[df['Direction'] == 'LONG'].copy()
             if not bull_df.empty:
@@ -626,7 +588,7 @@ if selected == "SignalX":
 
     # --- RIGHT COL: BEARISH ---
     with col2:
-        with st.container(border=True): # Uses native container with border (Card Style)
+        with st.container(border=True):
             st.markdown('<div class="header-bearish">🔴 Bearish Dragons</div>', unsafe_allow_html=True)
             bear_df = df[df['Direction'] == 'SHORT'].copy()
             if not bear_df.empty:
@@ -674,7 +636,7 @@ elif selected == "Sector Scope":
 
         # GREEN BAR CHART
         chart = alt.Chart(sector_counts).mark_bar(
-            color='#00FF7F', # Matching Neon Green
+            color='#00FF7F',
             cornerRadiusTopLeft=5,
             cornerRadiusTopRight=5
         ).encode(
@@ -694,10 +656,3 @@ elif selected == "Sector Scope":
             df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
             use_container_width=True, hide_index=True
         )
-
-
-
-
-
-
-
