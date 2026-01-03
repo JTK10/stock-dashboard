@@ -700,25 +700,48 @@ elif selected == "Sector Scope":
         st.stop()
 
     if 'Name' in df.columns:
+        # 1. Prepare Data
         df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
         unique_stocks = df['Cleaned_Name'].unique().tolist()
         
+        # 2. Map Sectors (Using optimized static map)
         with st.spinner(f"Mapping sectors for {len(unique_stocks)} stocks..."):
             sector_mapping = get_sector_map(unique_stocks)
         
         df['Sector'] = df['Cleaned_Name'].map(sector_mapping)
-        sector_counts = df['Sector'].value_counts().reset_index()
-        sector_counts.columns = ['Sector', 'Count']
 
-        # GREEN BAR CHART
-        chart = alt.Chart(sector_counts).mark_bar(
-            color='#00FF7F',
+        # 3. Calculate Sector Stats (Total Count & Bearish Count)
+        # We group by Sector and count total signals
+        sector_stats = df.groupby('Sector').size().reset_index(name='Total_Count')
+        
+        # We filter for SHORT signals and count them per sector
+        bearish_counts = df[df['Direction'] == 'SHORT'].groupby('Sector').size().reset_index(name='Bearish_Count')
+        
+        # Merge the two to get a complete picture
+        sector_stats = pd.merge(sector_stats, bearish_counts, on='Sector', how='left').fillna(0)
+        
+        # Calculate Bearish Percentage
+        sector_stats['Bearish_Pct'] = (sector_stats['Bearish_Count'] / sector_stats['Total_Count']) * 100
+        
+        # 4. Determine Color Logic
+        # If Bearish > 50%, Color is Red. Else Green.
+        sector_stats['Color'] = sector_stats['Bearish_Pct'].apply(
+            lambda x: '#FF4B4B' if x > 50 else '#00FF7F'
+        )
+
+        # 5. Create the Chart
+        chart = alt.Chart(sector_stats).mark_bar(
             cornerRadiusTopLeft=5,
             cornerRadiusTopRight=5
         ).encode(
             x=alt.X('Sector', sort='-y', axis=alt.Axis(labelAngle=-45, title=None)),
-            y=alt.Y('Count', axis=alt.Axis(title=None, tickMinStep=1)),
-            tooltip=['Sector', 'Count']
+            y=alt.Y('Total_Count', axis=alt.Axis(title=None, tickMinStep=1)),
+            color=alt.Color('Color', scale=None), # Use the calculated 'Color' column directly
+            tooltip=[
+                alt.Tooltip('Sector', title='Sector'),
+                alt.Tooltip('Total_Count', title='Total Alerts'),
+                alt.Tooltip('Bearish_Pct', title='Bearish %', format='.0f')
+            ]
         ).configure_axis(
             grid=False, labelColor='#eee', domainColor='#333'
         ).configure_view(strokeWidth=0).properties(height=400)
@@ -728,7 +751,18 @@ elif selected == "Sector Scope":
 
         st.divider()
         st.subheader("Sector Details")
+        
+        # Updated DataFrame view to show Direction clearly
         st.dataframe(
-            df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by='Sector'),
-            use_container_width=True, hide_index=True
+            df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by=['Sector', 'Direction']),
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "Direction": st.column_config.TextColumn(
+                    "Side",
+                    help="Trade Direction",
+                    validate="^(LONG|SHORT)$"
+                )
+            }
         )
+
