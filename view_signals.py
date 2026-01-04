@@ -15,34 +15,15 @@ from streamlit_option_menu import option_menu
 st.set_page_config(page_title="SignalX", layout="wide", page_icon="✖️")
 
 # --- USER AUTHENTICATION (DISABLED) ---
-# To re-enable, just uncomment the last line 'login_gate()'
 USERS = {"admin": "admin123", "trader": "signalx"} 
 
 if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = True # Default to True for now
-
-def login_gate():
-    if not st.session_state.authenticated:
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.markdown("## 🔐 Access SignalX")
-            st.info("Please log in to access the Alpha Stream.")
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            if st.button("Log In", type="primary", use_container_width=True):
-                if username in USERS and USERS[username] == password:
-                    st.session_state.authenticated = True
-                    st.rerun()
-                else:
-                    st.error("❌ Invalid credentials")
-        st.stop()
-
-# login_gate()  <-- DISABLED FOR NOW
+    st.session_state.authenticated = True 
 
 # --- AUTO REFRESH ---
 count = st_autorefresh(interval=300 * 1000, key="datarefresh")
 
-# --- 2. CUSTOM CSS ---
+# --- 2. CUSTOM CSS (UPGRADED) ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
@@ -52,10 +33,21 @@ st.markdown("""
         font-family: 'Inter', sans-serif;
     }
 
+    /* Part 3 & Final Touch: Hover & Shadows */
     [data-testid="stVerticalBlockBorderWrapper"] > div {
         background-color: #131722;
         border-radius: 12px;
         border: 1px solid #2a2e3a;
+        box-shadow: 0 0 18px rgba(0,0,0,.35);
+    }
+    
+    tbody tr:hover {
+        background-color: rgba(255,255,255,0.04) !important;
+    }
+
+    /* Part 6: Gradient Progress Bars */
+    [data-testid="stProgress"] div div {
+        background: linear-gradient(90deg,#16a34a,#22c55e);
     }
 
     .header-bullish {
@@ -84,21 +76,11 @@ st.markdown("""
         border-radius: 4px;
     }
 
-    [data-testid="stMetricValue"] {
-        font-size: 2.2rem;
-        font-weight: 800;
-        color: #e0e0e0;
-    }
-    [data-testid="stMetricLabel"] {
-        font-size: 1rem;
-        color: #a0a0a0;
-    }
-
     .block-container {
         padding-top: 2rem;
         padding-bottom: 3rem;
     }
-    
+     
     [data-testid="stSidebar"] {
         background-color: #0b0e14;
         border-right: 1px solid #2a2e3a;
@@ -137,7 +119,6 @@ TICKER_CORRECTIONS = {
     "BLUE STAR LIMITED": "BLUESTARCO",
     "HINDALCO INDUSTRIES LTD": "HINDALCO",
     "360 ONE WAM LIMITED": "360ONE",
-    "HINDALCO INDUSTRIES LTD": "HINDALCO",
     "HINDALCO INDUSTRIES LIMITED": "HINDALCO",
     "HINDALCO": "HINDALCO",
     "HINDALCO  INDUSTRIES  LTD": "HINDALCO",
@@ -283,7 +264,6 @@ TICKER_CORRECTIONS = {
     "ORACLE FIN SERV SOFT LTD.": "OFSS",
     "BANDHAN BANK LIMITED": "BANDHANBNK",
     "TECH MAHINDRA LIMITED": "TECHM",
-    "JIO FIN SERVICES LTD": "JIOFIN",
     "MPHASIS LIMITED": "MPHASIS",
     "SIEMENS LTD": "SIEMENS",
     "OIL INDIA LTD": "OIL",
@@ -328,7 +308,6 @@ TICKER_CORRECTIONS = {
     "MAZAGON DOCK SHIPBUIL LTD": "MAZDOCK",
     "TATA CHEMICALS LTD": "TATACHEM",
     "PG ELECTROPLAST LIMITED": "PGEL",
-    "HINDALCO  INDUSTRIES  LTD": "HINDALCO",
     "BAJAJ HOLDINGS & INVS LTD": "BAJAJHLDNG",
     "WAAREE ENERGIES LIMITED": "WAAREEENER",
     "SWIGGY LIMITED": "SWIGGY",
@@ -337,7 +316,7 @@ TICKER_CORRECTIONS = {
     "FSN E-COMMERCE VENTURES LTD": "NYKAA"
 }
 
-# === STATIC SECTOR MAPPING (NO API CALLS) ===
+# === STATIC SECTOR MAPPING ===
 STATIC_SECTORS = {
     # FIN SERVICE
     "HDFCBANK": "FIN SERVICE", "ICICIBANK": "FIN SERVICE", "AXISBANK": "FIN SERVICE", "KOTAKBANK": "FIN SERVICE",
@@ -405,7 +384,30 @@ STATIC_SECTORS = {
     "INDUSTOWER": "TELECOM", "BHARTIARTL": "TELECOM", "IDEA": "TELECOM",
 }
 
-# --- 3. LOAD DATA FROM DYNAMODB ---
+# --- 3. HELPER FUNCTIONS ---
+
+def metric_card(title, value, subtitle=None, color="#e5e7eb", glow=False):
+    return f"""
+    <div style="
+        padding:18px;
+        border-radius:14px;
+        background:linear-gradient(145deg,#0f1320,#0c101a);
+        border:1px solid #222634;
+        box-shadow:{'0 0 12px rgba(34,197,94,.35)' if glow else 'none'};
+    ">
+        <div style="color:#9ca3af;font-size:14px;margin-bottom:6px;">{title}</div>
+        <div style="font-size:32px;font-weight:800;color:white;">{value}</div>
+        <div style="color:{color};font-size:14px;">{subtitle or ""}</div>
+    </div>
+    """
+
+def classify_strength(rvol):
+    if rvol >= 2:
+        return "🚀 Strong"
+    if rvol >= 1:
+        return "⚠ Moderate"
+    return "💤 Weak"
+
 @st.cache_data(ttl=60)
 def load_data_from_dynamodb(target_date):
     try:
@@ -507,7 +509,7 @@ def fetch_live_updates(df, target_date):
         
     return df
 
-# --- 5. SECTOR FETCHING HELPER (UPDATED) ---
+# --- 5. SECTOR FETCHING HELPER ---
 @st.cache_data(show_spinner=False)
 def get_sector_map(clean_ticker_list):
     sector_map = {}
@@ -555,10 +557,6 @@ with st.sidebar:
     selected_date = st.date_input("📅 Select Date", today_india)
     
     st.divider()
-    # Logout button hidden since auth is disabled
-    # if st.button("🔒 Logout"):
-    #     st.session_state.authenticated = False
-    #     st.rerun()
 
 # 1. SignalX
 if selected == "SignalX":
@@ -613,23 +611,61 @@ if selected == "SignalX":
         df['Live_Move_Pct'] = ((df['Live_Price'] - df['SignalPrice']) / df['SignalPrice']) * 100
         df['Live_Move_Pct'] = df['Live_Move_Pct'].fillna(0.0)
 
-    # --- TRADINGVIEW LINK GENERATOR ---
+    # --- Part 7: GLOBAL SEARCH ---
+    search = st.text_input("🔎 Search ticker...", placeholder="Type symbol e.g. TATA")
+    if search:
+        df = df[df["Name"].str.contains(search, case=False)]
+
+    # --- TRADINGVIEW LINK GENERATOR & STRENGTH ---
     if 'Name' in df.columns:
         df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
         df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df['Cleaned_Name'].str.replace('&', '_').str.replace(' ', '')
         df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + df['TV_Symbol']
+        
+        # Part 4: Signal Strength
+        if 'RVOL' in df.columns:
+             df["Strength"] = df["RVOL"].apply(classify_strength)
+        else:
+             df["Strength"] = "💤 Weak"
 
-    # --- TOP METRICS ROW ---
+    # --- DATA SPLIT ---
     bull_count = len(df[df['Direction'] == 'LONG'])
     bear_count = len(df[df['Direction'] == 'SHORT'])
-    
-    m1, m2, m3 = st.columns(3)
-    with m1:
-        st.metric("Bullish Signals", bull_count, delta="Long Bias", delta_color="normal")
-    with m2:
-        st.metric("Bearish Signals", bear_count, delta="Short Bias", delta_color="inverse")
-    with m3:
-        st.metric("Total Active", bull_count + bear_count)
+
+    # --- Part 1: PREMIUM KPI CARDS ---
+    net_bias = bull_count - bear_count
+    bias_label = "Bullish" if net_bias > 0 else "Bearish" if net_bias < 0 else "Neutral"
+    bias_color = "#22c55e" if net_bias > 0 else "#ef4444" if net_bias < 0 else "#eab308"
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(metric_card("Bullish Signals", bull_count, "Long Bias", "#22c55e", glow=True), unsafe_allow_html=True)
+    c2.markdown(metric_card("Bearish Signals", bear_count, "Short Bias", "#ef4444"), unsafe_allow_html=True)
+    c3.markdown(metric_card("Total Active", bull_count + bear_count, "All Signals"), unsafe_allow_html=True)
+    c4.markdown(metric_card("Net Market Bias", bias_label, f"{net_bias:+}", bias_color), unsafe_allow_html=True)
+
+    # --- Part 2: NET MARKET BIAS GAUGE ---
+    st.write("") # Spacer
+    bias_score = (bull_count - bear_count) / max(bull_count + bear_count, 1)
+
+    gauge_df = pd.DataFrame({
+        "x": ["Bias"],
+        "score": [bias_score]
+    })
+
+    gauge = alt.Chart(gauge_df).mark_bar(
+        cornerRadiusTopLeft=10,
+        cornerRadiusTopRight=10
+    ).encode(
+        x=alt.X("x:N", axis=None),
+        y=alt.Y("score:Q", scale=alt.Scale(domain=[-1,1], nice=False), axis=None), # axis=None for cleaner look
+        color=alt.value("#22c55e" if bias_score > 0 else "#ef4444"),
+        tooltip=[alt.Tooltip("score", format=".2f")]
+    ).properties(
+        height=30
+    )
+
+    st.caption("📊 Net Market Bias (−1 = Fully Short, +1 = Fully Long)")
+    st.altair_chart(gauge, use_container_width=True)
 
     st.divider()
 
@@ -643,7 +679,7 @@ if selected == "SignalX":
             if not bull_df.empty:
                 bull_df = bull_df.sort_values(by='Live_Move_Pct', ascending=False)
                 st.data_editor(
-                    bull_df[['Chart', 'Name', 'Live_Move_Pct', 'Time', 'RVOL']], 
+                    bull_df[['Chart', 'Name', 'Live_Move_Pct', 'Strength', 'Time', 'RVOL']], 
                     column_config={
                         "Chart": st.column_config.LinkColumn("View", display_text="📈", width="small"),
                         "Name": st.column_config.TextColumn("Ticker", width="medium"),
@@ -654,6 +690,7 @@ if selected == "SignalX":
                             max_value=5,
                             width="medium"
                         ),
+                        "Strength": st.column_config.TextColumn("Strength", width="small"),
                         "Time": st.column_config.TextColumn("Time", width="small"), 
                         "RVOL": st.column_config.NumberColumn("RVOL", format="%.1fx", width="small"),
                     },
@@ -670,7 +707,7 @@ if selected == "SignalX":
             if not bear_df.empty:
                 bear_df = bear_df.sort_values(by='Live_Move_Pct', ascending=True)
                 st.data_editor(
-                    bear_df[['Chart', 'Name', 'Live_Move_Pct', 'Time', 'RVOL']], 
+                    bear_df[['Chart', 'Name', 'Live_Move_Pct', 'Strength', 'Time', 'RVOL']], 
                     column_config={
                         "Chart": st.column_config.LinkColumn("View", display_text="📉", width="small"),
                         "Name": st.column_config.TextColumn("Ticker", width="medium"),
@@ -681,6 +718,7 @@ if selected == "SignalX":
                             max_value=5,
                             width="medium"
                         ),
+                        "Strength": st.column_config.TextColumn("Strength", width="small"),
                         "Time": st.column_config.TextColumn("Time", width="small"),
                         "RVOL": st.column_config.NumberColumn("RVOL", format="%.1fx", width="small"),
                     },
@@ -711,23 +749,23 @@ elif selected == "Sector Scope":
         df['Sector'] = df['Cleaned_Name'].map(sector_mapping)
 
         # 3. Calculate Sector Stats (Total Count & Bearish Count)
-        # We group by Sector and count total signals
         sector_stats = df.groupby('Sector').size().reset_index(name='Total_Count')
-        
-        # We filter for SHORT signals and count them per sector
         bearish_counts = df[df['Direction'] == 'SHORT'].groupby('Sector').size().reset_index(name='Bearish_Count')
         
-        # Merge the two to get a complete picture
         sector_stats = pd.merge(sector_stats, bearish_counts, on='Sector', how='left').fillna(0)
-        
-        # Calculate Bearish Percentage
         sector_stats['Bearish_Pct'] = (sector_stats['Bearish_Count'] / sector_stats['Total_Count']) * 100
         
-        # 4. Determine Color Logic
-        # If Bearish > 50%, Color is Red. Else Green.
-        sector_stats['Color'] = sector_stats['Bearish_Pct'].apply(
-            lambda x: '#FF4B4B' if x > 50 else '#00FF7F'
-        )
+        # Bonus: Heat Score
+        def heat(score):
+            if score >= 70: return "🔥🔥🔥"
+            if score >= 40: return "🔥🔥"
+            if score >= 10: return "🔥"
+            return "❄"
+
+        sector_stats["Heat"] = sector_stats["Bearish_Pct"].apply(heat)
+
+        # 4. Color Logic
+        sector_stats['Color'] = sector_stats['Bearish_Pct'].apply(lambda x: '#FF4B4B' if x > 50 else '#00FF7F')
 
         # 5. Create the Chart
         chart = alt.Chart(sector_stats).mark_bar(
@@ -736,7 +774,7 @@ elif selected == "Sector Scope":
         ).encode(
             x=alt.X('Sector', sort='-y', axis=alt.Axis(labelAngle=-45, title=None)),
             y=alt.Y('Total_Count', axis=alt.Axis(title=None, tickMinStep=1)),
-            color=alt.Color('Color', scale=None), # Use the calculated 'Color' column directly
+            color=alt.Color('Color', scale=None), 
             tooltip=[
                 alt.Tooltip('Sector', title='Sector'),
                 alt.Tooltip('Total_Count', title='Total Alerts'),
@@ -752,17 +790,9 @@ elif selected == "Sector Scope":
         st.divider()
         st.subheader("Sector Details")
         
-        # Updated DataFrame view to show Direction clearly
+        # Updated DataFrame view with Heat
         st.dataframe(
-            df[['Name', 'Sector', 'Direction', 'SignalPrice']].sort_values(by=['Sector', 'Direction']),
-            use_container_width=True, 
-            hide_index=True,
-            column_config={
-                "Direction": st.column_config.TextColumn(
-                    "Side",
-                    help="Trade Direction",
-                    validate="^(LONG|SHORT)$"
-                )
-            }
+            sector_stats[["Sector", "Total_Count", "Bearish_Pct", "Heat"]],
+            use_container_width=True,
+            hide_index=True
         )
-
