@@ -10,6 +10,10 @@ import yfinance as yf
 import altair as alt
 from streamlit_autorefresh import st_autorefresh
 from streamlit_option_menu import option_menu
+import gc  # <--- FIX 1: Garbage Collection
+
+# --- 0. MEMORY CLEANUP ---
+gc.collect()
 
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="SignalX", layout="wide", page_icon="✖️")
@@ -330,7 +334,7 @@ STATIC_SECTORS = {
     "PAYTM": "FIN SERVICE", "POLICYBZR": "FIN SERVICE", "KFINTECH": "FIN SERVICE", "NUVAMA": "FIN SERVICE",
     "MFSL": "FIN SERVICE", "ICICIGI": "FIN SERVICE", "SBICARD": "FIN SERVICE", "MANAPPURAM": "FIN SERVICE",
     "IIFL": "FIN SERVICE", "RBLBANK": "FIN SERVICE", "YESBANK": "FIN SERVICE", "INDIANB": "FIN SERVICE",
-    "BANKINDIA": "FIN SERVICE", "HUDCO": "FIN SERVICE", "IRFC": "FIN SERVICE", "SAMMAANCAP": "FIN SERVICE",
+    "BANKINDIA": "FIN SERVICE", "HUDCO": "FIN SERVICE", "IRFC": "FIN SERVICE", "SAMMAAN CAPITAL LIMITED": "FIN SERVICE", "SAMMAANCAP": "FIN SERVICE",
 
     # IT
     "TCS": "IT", "INFY": "IT", "HCLTECH": "IT", "WIPRO": "IT", "TECHM": "IT", "LTIM": "IT",
@@ -448,7 +452,7 @@ def load_data_from_dynamodb(target_date):
     for col in numeric_cols:
         if col not in df.columns: df[col] = 0.0
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
-    
+     
     return df
 
 # --- 4. LIVE & HISTORICAL DATA ENGINE ---
@@ -460,28 +464,30 @@ def fetch_live_updates(df, target_date):
     df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
     unique_tickers = df['Cleaned_Name'].unique().tolist()
     yahoo_tickers = [f"{t}.NS" for t in unique_tickers]
-    
+     
     # 2. Determine Date Mode
     india_tz = pytz.timezone('Asia/Kolkata')
     is_today = target_date == datetime.now(india_tz).date()
-    
+     
     try:
         if is_today:
             # LIVE MODE
-            data = yf.download(tickers=yahoo_tickers, period="1d", interval="1m", progress=False)
+            # --- FIX 2: threads=False to prevent crashes on Free Tier ---
+            data = yf.download(tickers=yahoo_tickers, period="1d", interval="1m", progress=False, threads=False)
             if not data.empty and 'Close' in data:
                 final_prices = data['Close'].iloc[-1]
             else:
                 return df
         else:
             # HISTORY MODE
+            # --- FIX 2: threads=False here as well ---
             start_dt = target_date
             end_dt = target_date + timedelta(days=1)
-            data = yf.download(tickers=yahoo_tickers, start=start_dt, end=end_dt, interval="1d", progress=False)
-            
+            data = yf.download(tickers=yahoo_tickers, start=start_dt, end=end_dt, interval="1d", progress=False, threads=False)
+             
             if data.empty or 'Close' not in data:
                 return df
-            
+             
             final_prices = data['Close'].iloc[-1]
 
         # 3. Map Prices
@@ -491,12 +497,12 @@ def fetch_live_updates(df, target_date):
                 if isinstance(price_series, pd.Series):
                     if yf_ticker in price_series.index:
                         return float(price_series[yf_ticker])
-                
+                 
                 if len(unique_tickers) == 1:
                     if isinstance(price_series, pd.Series):
                         return float(price_series.iloc[0])
                     return float(price_series)
-                    
+                     
                 return 0.0
             except:
                 return 0.0
@@ -506,7 +512,7 @@ def fetch_live_updates(df, target_date):
     except Exception as e:
         print(f"Error fetching data: {e}")
         df['Live_Price'] = df['Live_Price'] if 'Live_Price' in df.columns else 0.0
-        
+     
     return df
 
 # --- 5. SECTOR FETCHING HELPER ---
@@ -555,7 +561,7 @@ with st.sidebar:
     india_tz = pytz.timezone('Asia/Kolkata')
     today_india = datetime.now(india_tz).date()
     selected_date = st.date_input("📅 Select Date", today_india)
-    
+     
     st.divider()
 
 # 1. SignalX
@@ -594,22 +600,28 @@ if selected == "SignalX":
 """, unsafe_allow_html=True)
 
     df = load_data_from_dynamodb(selected_date)
-    
+     
     if df.empty:
         st.info(f"No alerts found for {selected_date}")
         st.stop()
 
     # --- MAIN DATA FETCHING LOOP ---
-    with st.spinner(f'⚡ Fetching Prices for {selected_date}...'):
-        df = fetch_live_updates(df, selected_date)
-        
-        # Ensure columns are numeric
-        df['SignalPrice'] = pd.to_numeric(df['SignalPrice'], errors='coerce')
-        df['Live_Price'] = pd.to_numeric(df['Live_Price'], errors='coerce')
-        
-        # FORCE PnL Calculation
-        df['Live_Move_Pct'] = ((df['Live_Price'] - df['SignalPrice']) / df['SignalPrice']) * 100
-        df['Live_Move_Pct'] = df['Live_Move_Pct'].fillna(0.0)
+    # FIX 3: Replaced st.spinner with st.empty() to prevent Thread/Memory Error
+    loading_placeholder = st.empty()
+    loading_placeholder.text(f'⚡ Fetching Prices for {selected_date}...')
+    
+    df = fetch_live_updates(df, selected_date)
+    
+    # Clear message
+    loading_placeholder.empty()
+     
+    # Ensure columns are numeric
+    df['SignalPrice'] = pd.to_numeric(df['SignalPrice'], errors='coerce')
+    df['Live_Price'] = pd.to_numeric(df['Live_Price'], errors='coerce')
+     
+    # FORCE PnL Calculation
+    df['Live_Move_Pct'] = ((df['Live_Price'] - df['SignalPrice']) / df['SignalPrice']) * 100
+    df['Live_Move_Pct'] = df['Live_Move_Pct'].fillna(0.0)
 
     # --- Part 7: GLOBAL SEARCH ---
     search = st.text_input("🔎 Search ticker...", placeholder="Type symbol e.g. TATA")
@@ -743,8 +755,12 @@ elif selected == "Sector Scope":
         unique_stocks = df['Cleaned_Name'].unique().tolist()
         
         # 2. Map Sectors (Using optimized static map)
-        with st.spinner(f"Mapping sectors for {len(unique_stocks)} stocks..."):
-            sector_mapping = get_sector_map(unique_stocks)
+        # Using st.empty() here too instead of spinner to be safe
+        sector_msg = st.empty()
+        sector_msg.text(f"Mapping sectors for {len(unique_stocks)} stocks...")
+        
+        sector_mapping = get_sector_map(unique_stocks)
+        sector_msg.empty()
         
         df['Sector'] = df['Cleaned_Name'].map(sector_mapping)
 
