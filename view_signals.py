@@ -45,11 +45,6 @@ st.markdown("""
         background-color: rgba(255,255,255,0.04) !important;
     }
 
-    /* Progress Bars */
-    [data-testid="stProgress"] div div {
-        background: linear-gradient(90deg,#16a34a,#22c55e);
-    }
-
     .table-header {
         color: #FFFFFF;
         background: linear-gradient(90deg, rgba(255,255,255,0.05) 0%, rgba(0,0,0,0) 100%);
@@ -422,14 +417,13 @@ with st.container(border=True):
         df_sorted = df.sort_values(by='SuperScore', ascending=False)
         
         st.data_editor(
-            df_sorted[['Chart', 'Time', 'Name', 'Visual_Side', 'Rating', 'SuperScore', 'Alignment', 'Live_Move_Pct', 'RS_Score', 'RVOL']], 
+            df_sorted[['Chart', 'Time', 'Name', 'Visual_Side', 'SuperScore', 'Alignment', 'Live_Move_Pct', 'RS_Score', 'RVOL']], 
             column_config={
                 "Chart": st.column_config.LinkColumn("View", display_text="📊", width="small"),
                 "Time": st.column_config.TextColumn("Entry", width="small"),
                 "Name": st.column_config.TextColumn("Ticker", width="medium"),
                 "Visual_Side": st.column_config.TextColumn("Side", width="small"),
-                "Rating": st.column_config.TextColumn("Quality", width="medium"),
-                "SuperScore": st.column_config.ProgressColumn("Score", min_value=0, max_value=150, format="%d"),
+                "SuperScore": st.column_config.NumberColumn("Score", format="%d"),
                 "Alignment": st.column_config.TextColumn("Context", width="small"),
                 "Live_Move_Pct": st.column_config.NumberColumn("PnL %", format="%.2f%%"),
                 "RS_Score": st.column_config.NumberColumn("RS", format="%.2f"),
