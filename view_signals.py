@@ -50,23 +50,10 @@ st.markdown("""
         background: linear-gradient(90deg,#16a34a,#22c55e);
     }
 
-    .header-bullish {
-        color: #00FF7F;
-        background: linear-gradient(90deg, rgba(0,255,127,0.1) 0%, rgba(0,0,0,0) 100%);
+    .table-header {
+        color: #FFFFFF;
+        background: linear-gradient(90deg, rgba(255,255,255,0.05) 0%, rgba(0,0,0,0) 100%);
         border-left: 4px solid #00FF7F;
-        padding: 10px 15px;
-        margin-bottom: 15px;
-        font-size: 1.2rem;
-        font-weight: 800;
-        letter-spacing: 1px;
-        text-transform: uppercase;
-        border-radius: 4px;
-    }
-
-    .header-bearish {
-        color: #FF4B4B;
-        background: linear-gradient(90deg, rgba(255,75,75,0.1) 0%, rgba(0,0,0,0) 100%);
-        border-left: 4px solid #FF4B4B;
         padding: 10px 15px;
         margin-bottom: 15px;
         font-size: 1.2rem;
@@ -223,14 +210,6 @@ def metric_card(title, value, subtitle=None, color="#e5e7eb", glow=False):
     </div>
     """
 
-def classify_strength(rvol):
-    try:
-        rvol = float(rvol)
-        if rvol >= 3: return "🚀 Strong"
-        if rvol >= 1.5: return "⚠ Moderate"
-        return "💤 Weak"
-    except: return "N/A"
-
 @st.cache_data(ttl=60)
 def load_data_from_dynamodb(target_date):
     try:
@@ -275,6 +254,7 @@ def load_data_from_dynamodb(target_date):
     
     if 'Rating' not in df.columns: df['Rating'] = "N/A"
     if 'Alignment' not in df.columns: df['Alignment'] = "N/A"
+    if 'Time' not in df.columns: df['Time'] = ""
      
     return df
 
@@ -383,7 +363,7 @@ with st.sidebar:
     # Alignment Filter
     align_filter = st.multiselect("Market Alignment", ["✅ WITH TREND", "⚠️ CONTRA", "NEUTRAL"], default=["✅ WITH TREND", "⚠️ CONTRA"])
 
-# --- DASHBOARD LOGIC (No Sector Scope) ---
+# --- DASHBOARD LOGIC (Unified List) ---
 
 df = load_data_from_dynamodb(selected_date)
  
@@ -411,7 +391,10 @@ df['Live_Price'] = pd.to_numeric(df['Live_Price'], errors='coerce')
 df['Live_Move_Pct'] = ((df['Live_Price'] - df['SignalPrice']) / df['SignalPrice']) * 100
 df['Live_Move_Pct'] = df['Live_Move_Pct'].fillna(0.0)
 
-# --- KPI METRICS (UPDATED) ---
+# Adjust Side for Visualization
+df['Visual_Side'] = df['Direction'].map({'LONG': '🟢 LONG', 'SHORT': '🔴 SHORT'})
+
+# --- KPI METRICS ---
 bull_count = len(df[df['Direction'] == 'LONG'])
 bear_count = len(df[df['Direction'] == 'SHORT'])
 elite_count = len(df[df['SuperScore'] >= 100])
@@ -425,56 +408,34 @@ c4.markdown(metric_card("Bearish", bear_count, "Shorts", "#ef4444"), unsafe_allo
 
 st.divider()
 
-# --- PREPARE TABLE DATA ---
+# --- UNIFIED TABLE ---
 if 'Name' in df.columns:
     df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
     df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df['Cleaned_Name'].str.replace('&', '_').str.replace(' ', '')
     df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + df['TV_Symbol']
 
-col1, col2 = st.columns(2)
-
-# --- LEFT COL: BULLISH ---
-with col1:
-    with st.container(border=True):
-        st.markdown('<div class="header-bullish">🟢 Bullish Beacons</div>', unsafe_allow_html=True)
-        bull_df = df[df['Direction'] == 'LONG'].copy()
-        if not bull_df.empty:
-            bull_df = bull_df.sort_values(by='SuperScore', ascending=False)
-            st.data_editor(
-                bull_df[['Chart', 'Name', 'Rating', 'SuperScore', 'Alignment', 'Live_Move_Pct', 'RVOL']], 
-                column_config={
-                    "Chart": st.column_config.LinkColumn("View", display_text="📈", width="small"),
-                    "Name": st.column_config.TextColumn("Ticker", width="medium"),
-                    "Rating": st.column_config.TextColumn("Quality", width="medium"),
-                    "SuperScore": st.column_config.ProgressColumn("Score", min_value=0, max_value=150, format="%d"),
-                    "Alignment": st.column_config.TextColumn("Context", width="small"),
-                    "Live_Move_Pct": st.column_config.NumberColumn("PnL %", format="%.2f%%"),
-                    "RVOL": st.column_config.NumberColumn("Vol", format="%.1fx"),
-                },
-                hide_index=True, use_container_width=True, disabled=True, key="bull_table"
-            )
-        else:
-            st.caption("No Bullish Signals match filters.")
-
-# --- RIGHT COL: BEARISH ---
-with col2:
-    with st.container(border=True):
-        st.markdown('<div class="header-bearish">🔴 Bearish Dragons</div>', unsafe_allow_html=True)
-        bear_df = df[df['Direction'] == 'SHORT'].copy()
-        if not bear_df.empty:
-            bear_df = bear_df.sort_values(by='SuperScore', ascending=False)
-            st.data_editor(
-                bear_df[['Chart', 'Name', 'Rating', 'SuperScore', 'Alignment', 'Live_Move_Pct', 'RVOL']], 
-                column_config={
-                    "Chart": st.column_config.LinkColumn("View", display_text="📉", width="small"),
-                    "Name": st.column_config.TextColumn("Ticker", width="medium"),
-                    "Rating": st.column_config.TextColumn("Quality", width="medium"),
-                    "SuperScore": st.column_config.ProgressColumn("Score", min_value=0, max_value=150, format="%d"),
-                    "Alignment": st.column_config.TextColumn("Context", width="small"),
-                    "Live_Move_Pct": st.column_config.NumberColumn("PnL %", format="%.2f%%"),
-                    "RVOL": st.column_config.NumberColumn("Vol", format="%.1fx"),
-                },
-                hide_index=True, use_container_width=True, disabled=True, key="bear_table"
-            )
-        else:
-            st.caption("No Bearish Signals match filters.")
+with st.container(border=True):
+    st.markdown('<div class="table-header">🚨 Active Market Signals</div>', unsafe_allow_html=True)
+    
+    if not df.empty:
+        # Sort by SuperScore (Highest Quality First)
+        df_sorted = df.sort_values(by='SuperScore', ascending=False)
+        
+        st.data_editor(
+            df_sorted[['Chart', 'Time', 'Name', 'Visual_Side', 'Rating', 'SuperScore', 'Alignment', 'Live_Move_Pct', 'RS_Score', 'RVOL']], 
+            column_config={
+                "Chart": st.column_config.LinkColumn("View", display_text="📊", width="small"),
+                "Time": st.column_config.TextColumn("Entry", width="small"),
+                "Name": st.column_config.TextColumn("Ticker", width="medium"),
+                "Visual_Side": st.column_config.TextColumn("Side", width="small"),
+                "Rating": st.column_config.TextColumn("Quality", width="medium"),
+                "SuperScore": st.column_config.ProgressColumn("Score", min_value=0, max_value=150, format="%d"),
+                "Alignment": st.column_config.TextColumn("Context", width="small"),
+                "Live_Move_Pct": st.column_config.NumberColumn("PnL %", format="%.2f%%"),
+                "RS_Score": st.column_config.NumberColumn("RS", format="%.2f"),
+                "RVOL": st.column_config.NumberColumn("Vol", format="%.1fx"),
+            },
+            hide_index=True, use_container_width=True, disabled=True, key="unified_table"
+        )
+    else:
+        st.caption("No Signals match the current filters.")
