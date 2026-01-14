@@ -173,10 +173,16 @@ def load_data_from_dynamodb(target_date, signal_type=None):
     # Standardize
     if 'Price' in df.columns and 'SignalPrice' not in df.columns:
         df.rename(columns={'Price': 'SignalPrice'}, inplace=True)
+    
+    # --- DIRECTION LOGIC ---
+    # 1. Try mapping from Side
     if 'Side' in df.columns:
-        df['Direction'] = df['Side'].map({'Bullish': 'LONG', 'Bearish': 'SHORT'})
-    elif 'Signal' in df.columns and 'Side' not in df.columns:
-        df['Direction'] = df['Signal'].map({'LONG': 'LONG', 'SHORT': 'SHORT'})
+        df['Direction'] = df['Side'].astype(str).map({'Bullish': 'LONG', 'Bearish': 'SHORT', 'LONG': 'LONG', 'SHORT': 'SHORT'})
+    
+    # 2. Try mapping from Signal (if Side failed or missing)
+    if 'Direction' not in df.columns or df['Direction'].isnull().all():
+        if 'Signal' in df.columns:
+             df['Direction'] = df['Signal'].map({'LONG': 'LONG', 'SHORT': 'SHORT'})
 
     # Numeric Conversion
     numeric_cols = ['SignalPrice', 'TargetPrice', 'TargetPct', 'RVOL', 'NetMovePct', 'SuperScore', 'RS_Score', 'OI_Change']
@@ -346,14 +352,32 @@ def render_intraday_boost(selected_date):
         df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df['Cleaned_Name'].str.replace(' ', '')
         df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + df['TV_Symbol']
 
-    # Sort
     if 'SignalPrice' in df.columns: df['SignalPrice'] = pd.to_numeric(df['SignalPrice'], errors='coerce')
     
     st.markdown("### 🔥 Broken Levels Watchlist")
 
+    # --- FIX FOR "EVERYTHING IN BEARISH" ---
+    # We force classification based on BreakType if available, as Side might be unreliable for Boost alerts.
+    def classify_boost_side(row):
+        # 1. Trust 'BreakType' text if available (Case insensitive)
+        b_type = str(row.get('BreakType', '')).lower()
+        if 'high' in b_type or 'pdh' in b_type or 'res' in b_type:
+            return 'LONG'
+        if 'low' in b_type or 'pdl' in b_type or 'sup' in b_type:
+            return 'SHORT'
+        
+        # 2. Fallback to existing direction logic
+        d = str(row.get('Direction', ''))
+        if d == 'LONG': return 'LONG'
+        if d == 'SHORT': return 'SHORT'
+        
+        return 'UNKNOWN'
+
+    df['Boost_Direction'] = df.apply(classify_boost_side, axis=1)
+
     # Split into Bullish (LONG) and Bearish (SHORT)
-    df_bull = df[df['Direction'] == 'LONG'].copy()
-    df_bear = df[df['Direction'] == 'SHORT'].copy()
+    df_bull = df[df['Boost_Direction'] == 'LONG'].copy()
+    df_bear = df[df['Boost_Direction'] == 'SHORT'].copy()
 
     col1, col2 = st.columns(2)
 
