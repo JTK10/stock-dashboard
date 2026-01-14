@@ -349,27 +349,84 @@ def render_intraday_boost(selected_date):
     # Sort
     if 'SignalPrice' in df.columns: df['SignalPrice'] = pd.to_numeric(df['SignalPrice'], errors='coerce')
     
-    # NEW: OI COLOR LOGIC
-    # Positive OI = Green, Negative = Red
-    
     st.markdown("### 🔥 Broken Levels Watchlist")
-    
-    st.data_editor(
-        df[['Chart', 'Time', 'Name', 'BreakType', 'SignalPrice', 'OI_Change']],
-        column_config={
-            "Chart": st.column_config.LinkColumn("Chart", display_text="📈"),
-            "SignalPrice": st.column_config.NumberColumn("Break Price", format="%.2f"),
-            "OI_Change": st.column_config.NumberColumn("OI Change %", format="%.2f%%"),
-            "BreakType": st.column_config.TextColumn("Broken Level", help="PDH: Prev Day High")
-        },
-        use_container_width=True, hide_index=True, disabled=True
-    )
+
+    # Split into Bullish (LONG) and Bearish (SHORT)
+    df_bull = df[df['Direction'] == 'LONG'].copy()
+    df_bear = df[df['Direction'] == 'SHORT'].copy()
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("#### 🟢 Bullish Scans")
+        if not df_bull.empty:
+            st.data_editor(
+                df_bull[['Chart', 'Time', 'Name', 'BreakType', 'SignalPrice', 'OI_Change']],
+                column_config={
+                    "Chart": st.column_config.LinkColumn("Chart", display_text="📈"),
+                    "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
+                    "OI_Change": st.column_config.NumberColumn("OI Chg %", format="%.2f%%"),
+                    "BreakType": st.column_config.TextColumn("Level", help="PDH: Prev Day High")
+                },
+                use_container_width=True, hide_index=True, disabled=True, key="bull_table"
+            )
+        else:
+            st.caption("No Bullish setups found.")
+
+    with col2:
+        st.markdown("#### 🔴 Bearish Scans")
+        if not df_bear.empty:
+            st.data_editor(
+                df_bear[['Chart', 'Time', 'Name', 'BreakType', 'SignalPrice', 'OI_Change']],
+                column_config={
+                    "Chart": st.column_config.LinkColumn("Chart", display_text="📉"),
+                    "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
+                    "OI_Change": st.column_config.NumberColumn("OI Chg %", format="%.2f%%"),
+                    "BreakType": st.column_config.TextColumn("Level", help="PDL: Prev Day Low")
+                },
+                use_container_width=True, hide_index=True, disabled=True, key="bear_table"
+            )
+        else:
+            st.caption("No Bearish setups found.")
 
 
 # =========================================================
 # MAIN NAVIGATION
 # =========================================================
 with st.sidebar:
+    # --- RESTORED ORIGINAL SVG LOGO ---
+    st.markdown("""
+<div style="text-align: left; margin-bottom: 25px; padding-left: 10px;">
+<svg width="250" height="60" viewBox="0 0 400 70" fill="none" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<linearGradient id="bullGradient" x1="0%" y1="100%" x2="100%" y2="0%">
+<stop offset="0%" style="stop-color:#00F260;stop-opacity:1" />
+<stop offset="100%" style="stop-color:#0575E6;stop-opacity:1" />
+</linearGradient>
+<linearGradient id="bearGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+<stop offset="0%" style="stop-color:#FF416C;stop-opacity:1" />
+<stop offset="100%" style="stop-color:#FF4B2B;stop-opacity:1" />
+</linearGradient>
+<filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+<feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+<feMerge>
+<feMergeNode in="coloredBlur"/>
+<feMergeNode in="SourceGraphic"/>
+</feMerge>
+</filter>
+</defs>
+<g filter="url(#glow)">
+<path d="M15 15 C 30 15, 45 55, 65 65" stroke="url(#bearGradient)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M65 65 L 50 63 M 65 65 L 63 50" stroke="url(#bearGradient)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M15 65 C 30 65, 45 25, 65 15" stroke="url(#bullGradient)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M65 15 L 50 17 M 65 15 L 63 30" stroke="url(#bullGradient)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+<text x="85" y="52" fill="#FFFFFF" font-family="'Inter', sans-serif" font-weight="700" font-size="42" letter-spacing="-1">Signal</text>
+<text x="215" y="52" fill="url(#bullGradient)" font-family="'Inter', sans-serif" font-weight="700" font-size="42" letter-spacing="-1">X</text>
+</svg>
+</div>
+""", unsafe_allow_html=True)
+    
     st.divider()
     page = st.radio("Navigate", ["SignalX (Original)", "Intraday Boost"])
     st.divider()
