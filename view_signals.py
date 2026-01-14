@@ -175,11 +175,9 @@ def load_data_from_dynamodb(target_date, signal_type=None):
         df.rename(columns={'Price': 'SignalPrice'}, inplace=True)
     
     # --- DIRECTION LOGIC ---
-    # 1. Try mapping from Side
     if 'Side' in df.columns:
         df['Direction'] = df['Side'].astype(str).map({'Bullish': 'LONG', 'Bearish': 'SHORT', 'LONG': 'LONG', 'SHORT': 'SHORT'})
     
-    # 2. Try mapping from Signal (if Side failed or missing)
     if 'Direction' not in df.columns or df['Direction'].isnull().all():
         if 'Signal' in df.columns:
              df['Direction'] = df['Signal'].map({'LONG': 'LONG', 'SHORT': 'SHORT'})
@@ -335,7 +333,7 @@ def render_signalx(selected_date):
             )
 
 # =========================================================
-# PAGE 2: INTRADAY BOOST (NEW)
+# PAGE 2: INTRADAY BOOST (FIXED CLASSIFICATION)
 # =========================================================
 def render_intraday_boost(selected_date):
     st.header("🚀 Intraday Boost")
@@ -346,7 +344,6 @@ def render_intraday_boost(selected_date):
         st.warning("No Boost alerts found.")
         return
 
-    # Process Data
     if 'Name' in df.columns:
         df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
         df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df['Cleaned_Name'].str.replace(' ', '')
@@ -356,26 +353,24 @@ def render_intraday_boost(selected_date):
     
     st.markdown("### 🔥 Broken Levels Watchlist")
 
-    # --- FIX FOR "EVERYTHING IN BEARISH" ---
-    # We force classification based on BreakType if available, as Side might be unreliable for Boost alerts.
+    # --- FIXED CLASSIFICATION LOGIC ---
     def classify_boost_side(row):
-        # 1. Trust 'BreakType' text if available (Case insensitive)
-        b_type = str(row.get('BreakType', '')).lower()
-        if 'high' in b_type or 'pdh' in b_type or 'res' in b_type:
+        b_type = str(row.get('BreakType', '')).upper()
+        # Explicitly check for Week/Day Highs and Lows
+        if 'PDH' in b_type or 'PWH' in b_type or 'HIGH' in b_type:
             return 'LONG'
-        if 'low' in b_type or 'pdl' in b_type or 'sup' in b_type:
+        if 'PDL' in b_type or 'PWL' in b_type or 'LOW' in b_type:
             return 'SHORT'
         
-        # 2. Fallback to existing direction logic
-        d = str(row.get('Direction', ''))
-        if d == 'LONG': return 'LONG'
-        if d == 'SHORT': return 'SHORT'
+        # Fallback to existing direction
+        d = str(row.get('Direction', '')).upper()
+        if d == 'LONG' or d == 'BULLISH': return 'LONG'
+        if d == 'SHORT' or d == 'BEARISH': return 'SHORT'
         
         return 'UNKNOWN'
 
     df['Boost_Direction'] = df.apply(classify_boost_side, axis=1)
 
-    # Split into Bullish (LONG) and Bearish (SHORT)
     df_bull = df[df['Boost_Direction'] == 'LONG'].copy()
     df_bear = df[df['Boost_Direction'] == 'SHORT'].copy()
 
@@ -418,7 +413,6 @@ def render_intraday_boost(selected_date):
 # MAIN NAVIGATION
 # =========================================================
 with st.sidebar:
-    # --- RESTORED ORIGINAL SVG LOGO ---
     st.markdown("""
 <div style="text-align: left; margin-bottom: 25px; padding-left: 10px;">
 <svg width="250" height="60" viewBox="0 0 400 70" fill="none" xmlns="http://www.w3.org/2000/svg">
