@@ -182,6 +182,11 @@ def load_data_from_dynamodb(target_date, signal_type=None):
         if 'Signal' in df.columns:
              df['Direction'] = df['Signal'].map({'LONG': 'LONG', 'SHORT': 'SHORT'})
 
+    # --- OI FIELDS SAFE LOAD ---
+    if 'OI_Signal' not in df.columns: df['OI_Signal'] = "N/A"
+    if 'Confidence' not in df.columns: df['Confidence'] = "N/A"
+    if 'OI_Type' not in df.columns: df['OI_Type'] = "CHG"
+
     # Numeric Conversion
     numeric_cols = ['SignalPrice', 'TargetPrice', 'TargetPct', 'RVOL', 'NetMovePct', 'SuperScore', 'RS_Score', 'OI_Change']
     for col in numeric_cols:
@@ -200,10 +205,10 @@ def fetch_live_updates(df, target_date):
     df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
     unique_tickers = df['Cleaned_Name'].unique().tolist()
     yahoo_tickers = [f"{t}.NS" for t in unique_tickers]
-     
+      
     india_tz = pytz.timezone('Asia/Kolkata')
     is_today = target_date == datetime.now(india_tz).date()
-     
+      
     try:
         if is_today:
             data = yf.download(tickers=yahoo_tickers, period="1d", interval="1m", progress=False, threads=False)
@@ -232,7 +237,7 @@ def fetch_live_updates(df, target_date):
 
     except Exception as e:
         print(f"Error fetching data: {e}")
-     
+      
     df['Live_Price'] = df['Live_Price'] if 'Live_Price' in df.columns else 0.0
     return df
 
@@ -333,7 +338,7 @@ def render_signalx(selected_date):
             )
 
 # =========================================================
-# PAGE 2: INTRADAY BOOST (FIXED CLASSIFICATION)
+# PAGE 2: INTRADAY BOOST (UPDATED WITH OI DATA)
 # =========================================================
 def render_intraday_boost(selected_date):
     st.header("🚀 Intraday Boost")
@@ -376,16 +381,21 @@ def render_intraday_boost(selected_date):
 
     col1, col2 = st.columns(2)
 
+    # UPDATED COLUMN LIST TO INCLUDE OI SIGNAL AND CONFIDENCE
+    display_cols = ['Chart', 'Time', 'Name', 'BreakType', 'OI_Signal', 'Confidence', 'SignalPrice', 'OI_Change']
+
     with col1:
         st.markdown("#### 🟢 Bullish Scans")
         if not df_bull.empty:
             st.data_editor(
-                df_bull[['Chart', 'Time', 'Name', 'BreakType', 'SignalPrice', 'OI_Change']],
+                df_bull[display_cols],
                 column_config={
                     "Chart": st.column_config.LinkColumn("Chart", display_text="📈"),
                     "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
                     "OI_Change": st.column_config.NumberColumn("OI Chg %", format="%.2f%%"),
-                    "BreakType": st.column_config.TextColumn("Level", help="PDH: Prev Day High")
+                    "BreakType": st.column_config.TextColumn("Level", help="PDH: Prev Day High"),
+                    "OI_Signal": st.column_config.TextColumn("OI Context"),
+                    "Confidence": st.column_config.TextColumn("Conf")
                 },
                 use_container_width=True, hide_index=True, disabled=True, key="bull_table"
             )
@@ -396,12 +406,14 @@ def render_intraday_boost(selected_date):
         st.markdown("#### 🔴 Bearish Scans")
         if not df_bear.empty:
             st.data_editor(
-                df_bear[['Chart', 'Time', 'Name', 'BreakType', 'SignalPrice', 'OI_Change']],
+                df_bear[display_cols],
                 column_config={
                     "Chart": st.column_config.LinkColumn("Chart", display_text="📉"),
                     "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
                     "OI_Change": st.column_config.NumberColumn("OI Chg %", format="%.2f%%"),
-                    "BreakType": st.column_config.TextColumn("Level", help="PDL: Prev Day Low")
+                    "BreakType": st.column_config.TextColumn("Level", help="PDL: Prev Day Low"),
+                    "OI_Signal": st.column_config.TextColumn("OI Context"),
+                    "Confidence": st.column_config.TextColumn("Conf")
                 },
                 use_container_width=True, hide_index=True, disabled=True, key="bear_table"
             )
