@@ -186,9 +186,11 @@ def load_data_from_dynamodb(target_date, signal_type=None):
     if 'OI_Signal' not in df.columns: df['OI_Signal'] = "N/A"
     if 'Confidence' not in df.columns: df['Confidence'] = "N/A"
     if 'OI_Type' not in df.columns: df['OI_Type'] = "CHG"
+    if 'TargetLevel' not in df.columns: df['TargetLevel'] = "N/A"
 
     # Numeric Conversion
-    numeric_cols = ['SignalPrice', 'TargetPrice', 'TargetPct', 'RVOL', 'NetMovePct', 'SuperScore', 'RS_Score', 'OI_Change']
+    # UPDATED: Added 'Rank' to numeric columns to ensure proper sorting
+    numeric_cols = ['SignalPrice', 'TargetPrice', 'TargetPct', 'RVOL', 'NetMovePct', 'SuperScore', 'RS_Score', 'OI_Change', 'Rank']
     for col in numeric_cols:
         if col not in df.columns: df[col] = 0.0
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
@@ -338,11 +340,11 @@ def render_signalx(selected_date):
             )
 
 # =========================================================
-# PAGE 2: INTRADAY BOOST (UPDATED WITH OI DATA)
+# PAGE 2: INTRADAY BOOST (UPDATED: REDUCED COLUMNS + TARGETS)
 # =========================================================
 def render_intraday_boost(selected_date):
     st.header("🚀 Intraday Boost")
-    st.info("Top Gainers/Losers accumulated till 12 PM + NSE OI Spurts.")
+    st.info("Live Leaderboard: Top Gainers/Losers + Targets + OI Confirmation.")
 
     df = load_data_from_dynamodb(selected_date, "INTRADAY_BOOST")
     if df.empty:
@@ -356,18 +358,25 @@ def render_intraday_boost(selected_date):
 
     if 'SignalPrice' in df.columns: df['SignalPrice'] = pd.to_numeric(df['SignalPrice'], errors='coerce')
     
-    st.markdown("### 🔥 Broken Levels Watchlist")
+    # Sort by Rank for better visibility
+    if 'Rank' in df.columns:
+        df = df.sort_values(by='Rank', ascending=True)
 
-    # --- FIXED CLASSIFICATION LOGIC ---
+    st.markdown("### 🔥 Live Action")
+
+    # --- CLASSIFICATION LOGIC ---
     def classify_boost_side(row):
+        # 1. Check RankType (Highest Priority if available)
+        r_type = str(row.get('RankType', '')).upper()
+        if 'TOP GAINER' in r_type: return 'LONG'
+        if 'TOP LOSER' in r_type: return 'SHORT'
+
+        # 2. Check BreakType
         b_type = str(row.get('BreakType', '')).upper()
-        # Explicitly check for Week/Day Highs and Lows
-        if 'PDH' in b_type or 'PWH' in b_type or 'HIGH' in b_type:
-            return 'LONG'
-        if 'PDL' in b_type or 'PWL' in b_type or 'LOW' in b_type:
-            return 'SHORT'
+        if 'PDH' in b_type or 'PWH' in b_type or 'HIGH' in b_type: return 'LONG'
+        if 'PDL' in b_type or 'PWL' in b_type or 'LOW' in b_type: return 'SHORT'
         
-        # Fallback to existing direction
+        # 3. Fallback
         d = str(row.get('Direction', '')).upper()
         if d == 'LONG' or d == 'BULLISH': return 'LONG'
         if d == 'SHORT' or d == 'BEARISH': return 'SHORT'
@@ -381,19 +390,23 @@ def render_intraday_boost(selected_date):
 
     col1, col2 = st.columns(2)
 
-    # UPDATED COLUMN LIST TO INCLUDE OI SIGNAL AND CONFIDENCE
-    display_cols = ['Chart', 'Time', 'Name', 'BreakType', 'OI_Signal', 'Confidence', 'SignalPrice', 'OI_Change']
+    # --- REDUCED COLUMN LIST (Live Table Format) ---
+    # Removed: Time, OI_Change (Redundant)
+    # Added: Rank, TargetPrice, TargetLevel
+    display_cols = ['Rank', 'Chart', 'Name', 'SignalPrice', 'BreakType', 'TargetLevel', 'TargetPrice', 'OI_Signal', 'Confidence']
 
     with col1:
-        st.markdown("#### 🟢 Bullish Scans")
+        st.markdown("#### 🟢 Top Gainers & Breakouts")
         if not df_bull.empty:
             st.data_editor(
                 df_bull[display_cols],
                 column_config={
-                    "Chart": st.column_config.LinkColumn("Chart", display_text="📈"),
+                    "Rank": st.column_config.NumberColumn("#", format="%d", width="small"),
+                    "Chart": st.column_config.LinkColumn("View", display_text="📈", width="small"),
                     "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
-                    "OI_Change": st.column_config.NumberColumn("OI Chg %", format="%.2f%%"),
-                    "BreakType": st.column_config.TextColumn("Level", help="PDH: Prev Day High"),
+                    "BreakType": st.column_config.TextColumn("Status"),
+                    "TargetLevel": st.column_config.TextColumn("Next Lvl"),
+                    "TargetPrice": st.column_config.NumberColumn("Tgt", format="%.2f"),
                     "OI_Signal": st.column_config.TextColumn("OI Context"),
                     "Confidence": st.column_config.TextColumn("Conf")
                 },
@@ -403,15 +416,17 @@ def render_intraday_boost(selected_date):
             st.caption("No Bullish setups found.")
 
     with col2:
-        st.markdown("#### 🔴 Bearish Scans")
+        st.markdown("#### 🔴 Top Losers & Breakdowns")
         if not df_bear.empty:
             st.data_editor(
                 df_bear[display_cols],
                 column_config={
-                    "Chart": st.column_config.LinkColumn("Chart", display_text="📉"),
+                    "Rank": st.column_config.NumberColumn("#", format="%d", width="small"),
+                    "Chart": st.column_config.LinkColumn("View", display_text="📉", width="small"),
                     "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
-                    "OI_Change": st.column_config.NumberColumn("OI Chg %", format="%.2f%%"),
-                    "BreakType": st.column_config.TextColumn("Level", help="PDL: Prev Day Low"),
+                    "BreakType": st.column_config.TextColumn("Status"),
+                    "TargetLevel": st.column_config.TextColumn("Next Lvl"),
+                    "TargetPrice": st.column_config.NumberColumn("Tgt", format="%.2f"),
                     "OI_Signal": st.column_config.TextColumn("OI Context"),
                     "Confidence": st.column_config.TextColumn("Conf")
                 },
