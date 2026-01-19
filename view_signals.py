@@ -340,7 +340,7 @@ def render_signalx(selected_date):
             )
 
 # =========================================================
-# PAGE 2: INTRADAY BOOST (UPDATED: REDUCED COLUMNS + TARGETS)
+# PAGE 2: INTRADAY BOOST (CUSTOM COLUMNS UPDATED)
 # =========================================================
 def render_intraday_boost(selected_date):
     st.header("🚀 Intraday Boost")
@@ -351,32 +351,32 @@ def render_intraday_boost(selected_date):
         st.warning("No Boost alerts found.")
         return
 
+    # 1. Prepare Chart Links
     if 'Name' in df.columns:
         df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
         df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df['Cleaned_Name'].str.replace(' ', '')
         df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + df['TV_Symbol']
 
+    # 2. Ensure Numeric Sorting
     if 'SignalPrice' in df.columns: df['SignalPrice'] = pd.to_numeric(df['SignalPrice'], errors='coerce')
+    if 'RS_Score' in df.columns: df['RS_Score'] = pd.to_numeric(df['RS_Score'], errors='coerce')
+    if 'OI_Change' in df.columns: df['OI_Change'] = pd.to_numeric(df['OI_Change'], errors='coerce')
     
-    # Sort by Rank for better visibility
-    if 'Rank' in df.columns:
-        df = df.sort_values(by='Rank', ascending=True)
+    # Sort by RS Score (High to Low) for Bulls, or keep Rank if you prefer
+    if 'Rank' in df.columns: df = df.sort_values(by='Rank', ascending=True)
 
     st.markdown("### 🔥 Live Action")
 
-    # --- CLASSIFICATION LOGIC ---
+    # 3. Classification Logic (Bulls vs Bears)
     def classify_boost_side(row):
-        # 1. Check RankType (Highest Priority if available)
         r_type = str(row.get('RankType', '')).upper()
         if 'TOP GAINER' in r_type: return 'LONG'
         if 'TOP LOSER' in r_type: return 'SHORT'
 
-        # 2. Check BreakType
         b_type = str(row.get('BreakType', '')).upper()
         if 'PDH' in b_type or 'PWH' in b_type or 'HIGH' in b_type: return 'LONG'
         if 'PDL' in b_type or 'PWL' in b_type or 'LOW' in b_type: return 'SHORT'
         
-        # 3. Fallback
         d = str(row.get('Direction', '')).upper()
         if d == 'LONG' or d == 'BULLISH': return 'LONG'
         if d == 'SHORT' or d == 'BEARISH': return 'SHORT'
@@ -390,10 +390,8 @@ def render_intraday_boost(selected_date):
 
     col1, col2 = st.columns(2)
 
-    # --- REDUCED COLUMN LIST (Live Table Format) ---
-    # Removed: Time, OI_Change (Redundant)
-    # Added: Rank, TargetPrice, TargetLevel
-    display_cols = ['Rank', 'Chart', 'Name', 'SignalPrice', 'BreakType', 'TargetLevel', 'TargetPrice', 'OI_Signal', 'Confidence']
+    # --- FINAL COLUMN LIST (USER REQUESTED) ---
+    display_cols = ['Chart', 'Name', 'SignalPrice', 'BreakType', 'OI_Signal', 'RS_Score', 'OI_Change']
 
     with col1:
         st.markdown("#### 🟢 Top Gainers & Breakouts")
@@ -401,14 +399,13 @@ def render_intraday_boost(selected_date):
             st.data_editor(
                 df_bull[display_cols],
                 column_config={
-                    "Rank": st.column_config.NumberColumn("#", format="%d", width="small"),
                     "Chart": st.column_config.LinkColumn("View", display_text="📈", width="small"),
+                    "Name": st.column_config.TextColumn("Name", width="medium"),
                     "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
                     "BreakType": st.column_config.TextColumn("Status"),
-                    "TargetLevel": st.column_config.TextColumn("Next Lvl"),
-                    "TargetPrice": st.column_config.NumberColumn("Tgt", format="%.2f"),
                     "OI_Signal": st.column_config.TextColumn("OI Context"),
-                    "Confidence": st.column_config.TextColumn("Conf")
+                    "RS_Score": st.column_config.NumberColumn("RS Score", format="%.2f"),
+                    "OI_Change": st.column_config.NumberColumn("OI% Change", format="%.2f%%")
                 },
                 use_container_width=True, hide_index=True, disabled=True, key="bull_table"
             )
@@ -421,14 +418,13 @@ def render_intraday_boost(selected_date):
             st.data_editor(
                 df_bear[display_cols],
                 column_config={
-                    "Rank": st.column_config.NumberColumn("#", format="%d", width="small"),
                     "Chart": st.column_config.LinkColumn("View", display_text="📉", width="small"),
+                    "Name": st.column_config.TextColumn("Name", width="medium"),
                     "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
                     "BreakType": st.column_config.TextColumn("Status"),
-                    "TargetLevel": st.column_config.TextColumn("Next Lvl"),
-                    "TargetPrice": st.column_config.NumberColumn("Tgt", format="%.2f"),
                     "OI_Signal": st.column_config.TextColumn("OI Context"),
-                    "Confidence": st.column_config.TextColumn("Conf")
+                    "RS_Score": st.column_config.NumberColumn("RS Score", format="%.2f"),
+                    "OI_Change": st.column_config.NumberColumn("OI% Change", format="%.2f%%")
                 },
                 use_container_width=True, hide_index=True, disabled=True, key="bear_table"
             )
@@ -482,3 +478,4 @@ if page == "SignalX (Original)":
     render_signalx(selected_date)
 elif page == "Intraday Boost":
     render_intraday_boost(selected_date)
+
