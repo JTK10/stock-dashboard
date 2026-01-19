@@ -3,6 +3,7 @@ import pandas as pd
 import boto3
 from boto3.dynamodb.conditions import Attr
 import os
+import json
 from decimal import Decimal
 from datetime import datetime, timedelta
 import pytz
@@ -19,6 +20,7 @@ st.set_page_config(page_title="SignalX Dashboard", layout="wide", page_icon="⚡
 # --- CONFIG ---
 AWS_REGION = os.getenv("AWS_REGION", "ap-south-1") 
 DYNAMODB_TABLE = os.getenv("DYNAMODB_TABLE", "SentAlerts")
+NSE_OI_TABLE = "NSE_OI_DATA" # Table name for Sector Data
 DEFAULT_EXCHANGE = "NSE"
 
 # === TRADINGVIEW MAPPING ===
@@ -134,6 +136,47 @@ TICKER_CORRECTIONS = {
     "FSN E COMMERCE VENTURES LIMITED": "NYKAA", "FSN E-COMMERCE VENTURES LTD": "NYKAA"
 }
 
+# --- SECTOR MAPPING FOR NSE DATA ---
+SECTOR_MAP = {
+    # BANKING & FINANCE
+    "HDFCBANK": "Banking", "ICICIBANK": "Banking", "SBIN": "Banking", "AXISBANK": "Banking",
+    "KOTAKBANK": "Banking", "INDUSINDBK": "Banking", "BANKBARODA": "Banking", "PNB": "Banking",
+    "AUBANK": "Banking", "BANDHANBNK": "Banking", "FEDERALBNK": "Banking", "IDFCFIRSTB": "Banking",
+    "RBLBANK": "Banking", "BAJFINANCE": "Finance", "BAJAJFINSV": "Finance", "CHOLAFIN": "Finance",
+    "SHRIRAMFIN": "Finance", "MUTHOOTFIN": "Finance", "SBICARD": "Finance", "PEL": "Finance",
+    "MANAPPURAM": "Finance", "L&TFH": "Finance", "M&MFIN": "Finance", "PFC": "Finance", "RECLTD": "Finance",
+    # IT & TECH
+    "TCS": "IT", "INFY": "IT", "HCLTECH": "IT", "WIPRO": "IT", "TECHM": "IT", "LTIM": "IT",
+    "LTTS": "IT", "PERSISTENT": "IT", "COFORGE": "IT", "MPHASIS": "IT", "TATAELXSI": "IT",
+    "OFSS": "IT", "KPITTECH": "IT",
+    # AUTO & ANCILLARY
+    "MARUTI": "Auto", "TATAMOTORS": "Auto", "M&M": "Auto", "BAJAJ-AUTO": "Auto", "EICHERMOT": "Auto",
+    "HEROMOTOCO": "Auto", "TVSMOTOR": "Auto", "ASHOKLEY": "Auto", "BHARATFORG": "Auto",
+    "BALKRISIND": "Auto", "MRF": "Auto", "APOLLOTYRE": "Auto", "MOTHERSON": "Auto", "BOSCHLTD": "Auto",
+    # ENERGY & POWER
+    "RELIANCE": "Oil & Gas", "ONGC": "Oil & Gas", "BPCL": "Oil & Gas", "IOC": "Oil & Gas", "HPCL": "Oil & Gas",
+    "GAIL": "Oil & Gas", "PETRONET": "Oil & Gas", "NTPC": "Power", "POWERGRID": "Power", "TATAPOWER": "Power",
+    "ADANIGREEN": "Power", "ADANIENSOL": "Power", "JSWENERGY": "Power", "NHPC": "Power",
+    # CONSUMER & FMCG
+    "ITC": "FMCG", "HINDUNILVR": "FMCG", "NESTLEIND": "FMCG", "BRITANNIA": "FMCG", "TATACONSUM": "FMCG",
+    "DABUR": "FMCG", "GODREJCP": "FMCG", "MARICO": "FMCG", "COLPAL": "FMCG", "VBL": "FMCG",
+    "ASIANPAINT": "Consumer", "BERGEPAINT": "Consumer", "PIDILITIND": "Consumer", "TITAN": "Consumer",
+    "HAVELLS": "Consumer", "VOLTAS": "Consumer", "WHIRLPOOL": "Consumer", "PAGEIND": "Consumer", "TRENT": "Consumer",
+    # PHARMA & HEALTHCARE
+    "SUNPHARMA": "Pharma", "CIPLA": "Pharma", "DRREDDY": "Pharma", "DIVISLAB": "Pharma", "TORNTPHARM": "Pharma",
+    "LUPIN": "Pharma", "AUROPHARMA": "Pharma", "ALKEM": "Pharma", "BIOCON": "Pharma", "SYNGENE": "Pharma",
+    "GLENMARK": "Pharma", "GRANULES": "Pharma", "LAURUSLABS": "Pharma", "APOLLOHOSP": "Healthcare", 
+    "METROPOLIS": "Healthcare", "LALPATHLAB": "Healthcare",
+    # METALS & MINING
+    "TATASTEEL": "Metals", "JSWSTEEL": "Metals", "HINDALCO": "Metals", "VEDL": "Metals", "JINDALSTEL": "Metals",
+    "SAIL": "Metals", "NMDC": "Metals", "NATIONALUM": "Metals", "COALINDIA": "Metals", "HINDZINC": "Metals",
+    # REALTY & INFRA
+    "DLF": "Realty", "GODREJPROP": "Realty", "OBEROIRLTY": "Realty", "PHOENIXLTD": "Realty", "PRESTIGE": "Realty",
+    "LODHA": "Realty", "LT": "Infra", "HAL": "Defence", "BEL": "Defence", "MAZDOCK": "Defence", "COCHINSHIP": "Defence",
+    "BDL": "Defence", "IRCTC": "Railways", "CONCOR": "Logistics", "INDIGO": "Aviation",
+    "ADANIENT": "Diversified", "ADANIPORTS": "Infra"
+}
+
 # --- HELPER FUNCTIONS ---
 def convert_decimal(obj):
     if isinstance(obj, list): return [convert_decimal(i) for i in obj]
@@ -189,7 +232,6 @@ def load_data_from_dynamodb(target_date, signal_type=None):
     if 'TargetLevel' not in df.columns: df['TargetLevel'] = "N/A"
 
     # Numeric Conversion
-    # UPDATED: Added 'Rank' to numeric columns to ensure proper sorting
     numeric_cols = ['SignalPrice', 'TargetPrice', 'TargetPct', 'RVOL', 'NetMovePct', 'SuperScore', 'RS_Score', 'OI_Change', 'Rank']
     for col in numeric_cols:
         if col not in df.columns: df[col] = 0.0
@@ -200,6 +242,22 @@ def load_data_from_dynamodb(target_date, signal_type=None):
     if 'Time' not in df.columns: df['Time'] = ""
     
     return df
+
+@st.cache_data(ttl=60)
+def load_nse_sector_data():
+    """Loads Raw NSE Data from NSE_OI_DATA Table for Sector View"""
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
+        table = dynamodb.Table(NSE_OI_TABLE) 
+        response = table.get_item(Key={"PK": "NSE#OI", "SK": "LATEST"})
+        
+        if "Item" in response and "data" in response["Item"]:
+            json_str = response["Item"]["data"]
+            data = json.loads(json_str)
+            return pd.DataFrame(data)
+    except Exception as e:
+        st.error(f"Error loading NSE Data: {e}")
+    return pd.DataFrame()
 
 def fetch_live_updates(df, target_date):
     if df.empty or 'Name' not in df.columns: return df
@@ -340,7 +398,7 @@ def render_signalx(selected_date):
             )
 
 # =========================================================
-# PAGE 2: INTRADAY BOOST (CUSTOM COLUMNS UPDATED)
+# PAGE 2: INTRADAY BOOST
 # =========================================================
 def render_intraday_boost(selected_date):
     st.header("🚀 Intraday Boost")
@@ -362,7 +420,6 @@ def render_intraday_boost(selected_date):
     if 'RS_Score' in df.columns: df['RS_Score'] = pd.to_numeric(df['RS_Score'], errors='coerce')
     if 'OI_Change' in df.columns: df['OI_Change'] = pd.to_numeric(df['OI_Change'], errors='coerce')
     
-    # Sort by RS Score (High to Low) for Bulls, or keep Rank if you prefer
     if 'Rank' in df.columns: df = df.sort_values(by='Rank', ascending=True)
 
     st.markdown("### 🔥 Live Action")
@@ -431,6 +488,72 @@ def render_intraday_boost(selected_date):
         else:
             st.caption("No Bearish setups found.")
 
+# =========================================================
+# PAGE 3: SECTOR VIEW (NEW)
+# =========================================================
+def render_sector_view():
+    st.header("📊 Sector Participation View")
+    
+    # 1. Load Data
+    df = load_nse_sector_data()
+    if df.empty:
+        st.warning("No NSE OI Data found. Please check if the scraper is running.")
+        return
+
+    # 2. Process Data
+    # Map Sectors
+    df['Sector'] = df['symbol'].map(SECTOR_MAP).fillna('Others')
+    
+    # Ensure Numeric Types
+    cols_to_fix = ['pChangeInOpenInterest', 'lastPrice', 'changeinOpenInterest']
+    for col in cols_to_fix:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    # 3. Sector Aggregation
+    sector_stats = df.groupby('Sector')['pChangeInOpenInterest'].mean().reset_index()
+    sector_stats = sector_stats.sort_values('pChangeInOpenInterest', ascending=False)
+    
+    sector_counts = df['Sector'].value_counts().reset_index()
+    sector_counts.columns = ['Sector', 'Stock_Count']
+    
+    final_sector = pd.merge(sector_stats, sector_counts, on='Sector')
+    final_sector = final_sector[final_sector['Sector'] != 'Others']
+
+    # 4. Visualization
+    st.subheader("🔥 Sector Heatmap (Avg OI Change %)")
+    st.bar_chart(final_sector.set_index('Sector')['pChangeInOpenInterest'])
+
+    # 5. Deep Dive Table
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.markdown("### 🏆 Top Sectors")
+        st.dataframe(
+            final_sector.style.format({"pChangeInOpenInterest": "{:.2f}%"}),
+            column_order=("Sector", "pChangeInOpenInterest", "Stock_Count"),
+            hide_index=True,
+            use_container_width=True
+        )
+
+    with col2:
+        st.markdown("### 🔍 Stock Drilldown")
+        selected_sector = st.selectbox("Select Sector to Inspect", final_sector['Sector'].unique())
+        
+        subset = df[df['Sector'] == selected_sector].copy()
+        subset = subset.sort_values('pChangeInOpenInterest', ascending=False)
+        
+        st.dataframe(
+            subset[['symbol', 'pChangeInOpenInterest', 'openInterest', 'lastPrice']],
+            column_config={
+                "symbol": "Stock",
+                "pChangeInOpenInterest": st.column_config.NumberColumn("OI Chg %", format="%.2f%%"),
+                "openInterest": st.column_config.NumberColumn("Total OI", format="%d"),
+                "lastPrice": st.column_config.NumberColumn("Price", format="%.2f"),
+            },
+            hide_index=True,
+            use_container_width=True
+        )
 
 # =========================================================
 # MAIN NAVIGATION
@@ -469,7 +592,7 @@ with st.sidebar:
 """, unsafe_allow_html=True)
     
     st.divider()
-    page = st.radio("Navigate", ["SignalX (Original)", "Intraday Boost"])
+    page = st.radio("Navigate", ["SignalX (Original)", "Intraday Boost", "Sector View"])
     st.divider()
     india_tz = pytz.timezone('Asia/Kolkata')
     selected_date = st.date_input("📅 Select Date", datetime.now(india_tz).date())
@@ -478,4 +601,5 @@ if page == "SignalX (Original)":
     render_signalx(selected_date)
 elif page == "Intraday Boost":
     render_intraday_boost(selected_date)
-
+elif page == "Sector View":
+    render_sector_view()
