@@ -402,7 +402,7 @@ def render_signalx(selected_date):
 # =========================================================
 def render_intraday_boost(selected_date):
     st.header("🚀 Intraday Boost")
-    st.info("Live Leaderboard: Top Gainers/Losers + Targets + OI Confirmation.")
+    st.info("Live Leaderboard")
 
     df = load_data_from_dynamodb(selected_date, "INTRADAY_BOOST")
     if df.empty:
@@ -603,3 +603,4 @@ elif page == "Intraday Boost":
     render_intraday_boost(selected_date)
 elif page == "Sector View":
     render_sector_view()
+
