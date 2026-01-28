@@ -210,8 +210,6 @@ def load_data_from_dynamodb(target_date, signal_type=None):
     if signal_type:
         if 'Signal' in df.columns:
             df = df[df['Signal'] == signal_type].copy()
-        elif signal_type == "ALPHA_HUNTER": # Fallback for old alerts
-             df = df[~df['Signal'].isin(["INTRADAY_BOOST"])].copy()
 
     # Standardize
     if 'Price' in df.columns and 'SignalPrice' not in df.columns:
@@ -225,21 +223,21 @@ def load_data_from_dynamodb(target_date, signal_type=None):
         if 'Signal' in df.columns:
              df['Direction'] = df['Signal'].map({'LONG': 'LONG', 'SHORT': 'SHORT'})
 
-    # --- OI FIELDS SAFE LOAD ---
+    # --- OI FIELDS SAFE LOAD (UPDATED FOR NEW LAMBDA) ---
     if 'OI_Signal' not in df.columns: df['OI_Signal'] = "N/A"
     if 'Confidence' not in df.columns: df['Confidence'] = "N/A"
     if 'OI_Type' not in df.columns: df['OI_Type'] = "CHG"
     if 'TargetLevel' not in df.columns: df['TargetLevel'] = "N/A"
+    if 'Boost_Notes' not in df.columns: df['Boost_Notes'] = ""
+    if 'Time' not in df.columns: df['Time'] = ""
 
     # Numeric Conversion
-    numeric_cols = ['SignalPrice', 'TargetPrice', 'TargetPct', 'RVOL', 'NetMovePct', 'SuperScore', 'RS_Score', 'OI_Change', 'Rank']
+    numeric_cols = ['SignalPrice', 'TargetPrice', 'TargetPct', 'RVOL', 'NetMovePct', 'RS_Score', 'OI_Change', 'Rank', 'Delta_OI', 'Delta_Price']
     for col in numeric_cols:
         if col not in df.columns: df[col] = 0.0
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
     
-    if 'Rating' not in df.columns: df['Rating'] = "N/A"
-    if 'Alignment' not in df.columns: df['Alignment'] = "N/A"
-    if 'Time' not in df.columns: df['Time'] = ""
+    if 'BreakType' not in df.columns: df['BreakType'] = "N/A"
     
     return df
 
@@ -312,9 +310,9 @@ def metric_card(title, value, subtitle=None, color="#e5e7eb", glow=False):
     """
 
 # =========================================================
-# PAGE 1: SIGNAL X (ORIGINAL)
+# PAGE 1: LIVE ALERTS (BLASTS & FLOWS)
 # =========================================================
-def render_signalx(selected_date):
+def render_live_alerts(selected_date):
     # CSS & AUTO REFRESH
     count = st_autorefresh(interval=300 * 1000, key="datarefresh")
     st.markdown("""
@@ -329,80 +327,94 @@ def render_signalx(selected_date):
     </style>
     """, unsafe_allow_html=True)
 
-    # --- FILTERS ---
-    st.sidebar.subheader("🔍 Filters")
-    rating_filter = st.sidebar.multiselect("Quality", ["⭐⭐⭐⭐⭐ (ELITE)", "⭐⭐⭐⭐ (HIGH)", "⭐⭐⭐ (MED)", "⭐ (LOW)"], default=["⭐⭐⭐⭐⭐ (ELITE)", "⭐⭐⭐⭐ (HIGH)"])
-    align_filter = st.sidebar.multiselect("Market Alignment", ["✅ WITH TREND", "⚠️ CONTRA", "NEUTRAL"], default=["✅ WITH TREND", "⚠️ CONTRA"])
-
+    st.subheader("🚀 Live OI Blasts & High Flows")
+    
     # --- DATA ---
-    df = load_data_from_dynamodb(selected_date, "ALPHA_HUNTER")
+    # Query INTRADAY_BOOST but filter for the high quality ones
+    df = load_data_from_dynamodb(selected_date, "INTRADAY_BOOST")
+    
     if df.empty:
-        st.info(f"No Alpha Hunter alerts found for {selected_date}")
+        st.info(f"No data found for {selected_date}")
         return
 
-    # Apply Filters
-    if rating_filter: df = df[df['Rating'].isin(rating_filter)]
-    if align_filter: df = df[df['Alignment'].isin(align_filter)]
+    # --- FILTER FOR BLASTS & HIGH CONFIDENCE ---
+    # Logic: Either it has "BLAST" in notes OR it's High Confidence with big OI Change
+    blast_mask = df['Boost_Notes'].str.contains("BLAST", case=False, na=False)
+    flow_mask = (df['Confidence'] == "HIGH") & (df['OI_Change'].abs() > 15)
+    
+    alerts_df = df[blast_mask | flow_mask].copy()
 
-    # Fetch Live
+    if alerts_df.empty:
+        st.info("No 'Blast' or 'High Conviction' alerts yet today. Market might be quiet.")
+        return
+
+    # Fetch Live Prices
     loading_placeholder = st.empty()
     loading_placeholder.text(f'⚡ Fetching Prices for {selected_date}...')
-    df = fetch_live_updates(df, selected_date)
+    alerts_df = fetch_live_updates(alerts_df, selected_date)
     loading_placeholder.empty()
 
     # Calculations
-    df['SignalPrice'] = pd.to_numeric(df['SignalPrice'], errors='coerce')
-    df['Live_Price'] = pd.to_numeric(df['Live_Price'], errors='coerce')
-    df['Live_Move_Pct'] = ((df['Live_Price'] - df['SignalPrice']) / df['SignalPrice']) * 100
-    df['Live_Move_Pct'] = df['Live_Move_Pct'].fillna(0.0)
-    df['Visual_Side'] = df['Direction'].map({'LONG': '🟢 LONG', 'SHORT': '🔴 SHORT'})
+    alerts_df['SignalPrice'] = pd.to_numeric(alerts_df['SignalPrice'], errors='coerce')
+    alerts_df['Live_Price'] = pd.to_numeric(alerts_df['Live_Price'], errors='coerce')
+    alerts_df['Live_Move_Pct'] = ((alerts_df['Live_Price'] - alerts_df['SignalPrice']) / alerts_df['SignalPrice']) * 100
+    alerts_df['Live_Move_Pct'] = alerts_df['Live_Move_Pct'].fillna(0.0)
+    alerts_df['Visual_Side'] = alerts_df['Direction'].map({'LONG': '🟢 LONG', 'SHORT': '🔴 SHORT'})
+    
+    # Identify Type
+    def get_type(row):
+        if "BLAST" in str(row['Boost_Notes']): return "🚀 BLAST"
+        return "🌊 FLOW"
+    
+    alerts_df['Type'] = alerts_df.apply(get_type, axis=1)
 
     # --- METRICS ---
-    bull_count = len(df[df['Direction'] == 'LONG'])
-    bear_count = len(df[df['Direction'] == 'SHORT'])
-    elite_count = len(df[df['SuperScore'] >= 100])
-    avg_score = int(df['SuperScore'].mean()) if not df.empty else 0
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.markdown(metric_card("Elite Setups", elite_count, "Score 100+", "#eab308", glow=True), unsafe_allow_html=True)
-    c2.markdown(metric_card("Avg Quality", avg_score, "SuperScore", "#60a5fa"), unsafe_allow_html=True)
-    c3.markdown(metric_card("Bullish", bull_count, "Longs", "#22c55e"), unsafe_allow_html=True)
-    c4.markdown(metric_card("Bearish", bear_count, "Shorts", "#ef4444"), unsafe_allow_html=True)
+    total_alerts = len(alerts_df)
+    blast_count = len(alerts_df[alerts_df['Type'] == "🚀 BLAST"])
+    flow_count = len(alerts_df[alerts_df['Type'] == "🌊 FLOW"])
+    
+    c1, c2, c3 = st.columns(3)
+    c1.markdown(metric_card("Total Alerts", total_alerts, "Significant Moves", "#eab308", glow=True), unsafe_allow_html=True)
+    c2.markdown(metric_card("OI Blasts", blast_count, "Hidden Accumulation", "#60a5fa"), unsafe_allow_html=True)
+    c3.markdown(metric_card("High Flows", flow_count, ">15% OI Change", "#22c55e"), unsafe_allow_html=True)
 
     st.divider()
 
     # --- TABLE ---
-    if 'Name' in df.columns:
-        df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
-        df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df['Cleaned_Name'].str.replace('&', '_').str.replace(' ', '')
-        df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + df['TV_Symbol']
+    if 'Name' in alerts_df.columns:
+        alerts_df['Cleaned_Name'] = alerts_df['Name'].replace(TICKER_CORRECTIONS)
+        alerts_df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + alerts_df['Cleaned_Name'].str.replace('&', '_').str.replace(' ', '')
+        alerts_df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + alerts_df['TV_Symbol']
 
     with st.container(border=True):
-        st.markdown('<div class="table-header">🚨 Active Market Signals</div>', unsafe_allow_html=True)
-        if not df.empty:
-            df_sorted = df.sort_values(by='SuperScore', ascending=False)
-            st.data_editor(
-                df_sorted[['Chart', 'Time', 'Name', 'Visual_Side', 'SuperScore', 'Alignment', 'Live_Move_Pct', 'RS_Score', 'RVOL']], 
-                column_config={
-                    "Chart": st.column_config.LinkColumn("View", display_text="📊", width="small"),
-                    "Time": st.column_config.TextColumn("Entry", width="small"),
-                    "Name": st.column_config.TextColumn("Ticker", width="medium"),
-                    "Visual_Side": st.column_config.TextColumn("Side", width="small"),
-                    "SuperScore": st.column_config.NumberColumn("Score", format="%d"),
-                    "Alignment": st.column_config.TextColumn("Context", width="small"),
-                    "Live_Move_Pct": st.column_config.NumberColumn("PnL %", format="%.2f%%"),
-                    "RS_Score": st.column_config.NumberColumn("RS", format="%.2f"),
-                    "RVOL": st.column_config.NumberColumn("Vol", format="%.1fx"),
-                },
-                hide_index=True, use_container_width=True, disabled=True, key="unified_table"
-            )
+        st.markdown('<div class="table-header">🔥 Active Signals</div>', unsafe_allow_html=True)
+        
+        # Sort by Time (Latest First)
+        if 'Time' in alerts_df.columns:
+            alerts_df = alerts_df.sort_values(by='Time', ascending=False)
+            
+        st.data_editor(
+            alerts_df[['Chart', 'Time', 'Name', 'Type', 'Visual_Side', 'SignalPrice', 'Delta_OI', 'OI_Change', 'TargetLevel']], 
+            column_config={
+                "Chart": st.column_config.LinkColumn("View", display_text="📊", width="small"),
+                "Time": st.column_config.TextColumn("Entry Time", width="small"),
+                "Name": st.column_config.TextColumn("Ticker", width="medium"),
+                "Type": st.column_config.TextColumn("Alert Type", width="small"),
+                "Visual_Side": st.column_config.TextColumn("Side", width="small"),
+                "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
+                "Delta_OI": st.column_config.NumberColumn("5m OI Surge", format="%.2f%%"),
+                "OI_Change": st.column_config.NumberColumn("Total OI %", format="%.2f%%"),
+                "TargetLevel": st.column_config.TextColumn("Target"),
+            },
+            hide_index=True, use_container_width=True, disabled=True, key="alerts_table"
+        )
 
 # =========================================================
-# PAGE 2: INTRADAY BOOST
+# PAGE 2: MARKET LEADERBOARD (FULL LIST)
 # =========================================================
 def render_intraday_boost(selected_date):
-    st.header("🚀 Intraday Boost")
-    st.info("Live Leaderboard")
+    st.header("📈 Market Leaderboard (Intraday Boost)")
+    st.info("Full list of Top Gainers/Losers monitored for Flows.")
 
     df = load_data_from_dynamodb(selected_date, "INTRADAY_BOOST")
     if df.empty:
@@ -422,7 +434,7 @@ def render_intraday_boost(selected_date):
     
     if 'Rank' in df.columns: df = df.sort_values(by='Rank', ascending=True)
 
-    st.markdown("### 🔥 Live Action")
+    st.markdown("### 🔥 Market Context")
 
     # 3. Classification Logic (Bulls vs Bears)
     def classify_boost_side(row):
@@ -447,8 +459,8 @@ def render_intraday_boost(selected_date):
 
     col1, col2 = st.columns(2)
 
-    # --- FINAL COLUMN LIST (USER REQUESTED) ---
-    display_cols = ['Chart', 'Name', 'SignalPrice', 'BreakType', 'OI_Signal', 'RS_Score', 'OI_Change']
+    # --- DISPLAY COLUMNS (Added Delta_OI for context) ---
+    display_cols = ['Chart', 'Name', 'SignalPrice', 'BreakType', 'OI_Signal', 'OI_Change']
 
     with col1:
         st.markdown("#### 🟢 Top Gainers & Breakouts")
@@ -461,7 +473,6 @@ def render_intraday_boost(selected_date):
                     "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
                     "BreakType": st.column_config.TextColumn("Status"),
                     "OI_Signal": st.column_config.TextColumn("OI Context"),
-                    "RS_Score": st.column_config.NumberColumn("RS Score", format="%.2f"),
                     "OI_Change": st.column_config.NumberColumn("OI% Change", format="%.2f%%")
                 },
                 use_container_width=True, hide_index=True, disabled=True, key="bull_table"
@@ -480,7 +491,6 @@ def render_intraday_boost(selected_date):
                     "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
                     "BreakType": st.column_config.TextColumn("Status"),
                     "OI_Signal": st.column_config.TextColumn("OI Context"),
-                    "RS_Score": st.column_config.NumberColumn("RS Score", format="%.2f"),
                     "OI_Change": st.column_config.NumberColumn("OI% Change", format="%.2f%%")
                 },
                 use_container_width=True, hide_index=True, disabled=True, key="bear_table"
@@ -489,7 +499,7 @@ def render_intraday_boost(selected_date):
             st.caption("No Bearish setups found.")
 
 # =========================================================
-# PAGE 3: SECTOR VIEW (NEW)
+# PAGE 3: SECTOR VIEW (RAW DATA)
 # =========================================================
 def render_sector_view():
     st.header("📊 Sector Participation View")
@@ -592,15 +602,15 @@ with st.sidebar:
 """, unsafe_allow_html=True)
     
     st.divider()
-    page = st.radio("Navigate", ["SignalX (Original)", "Intraday Boost", "Sector View"])
+    # RENAMED PAGE 1 to reflect new logic
+    page = st.radio("Navigate", ["🚀 Live Alerts (Blasts)", "📈 Market Leaderboard", "📊 Sector View"])
     st.divider()
     india_tz = pytz.timezone('Asia/Kolkata')
     selected_date = st.date_input("📅 Select Date", datetime.now(india_tz).date())
 
-if page == "SignalX (Original)":
-    render_signalx(selected_date)
-elif page == "Intraday Boost":
+if page == "🚀 Live Alerts (Blasts)":
+    render_live_alerts(selected_date)
+elif page == "📈 Market Leaderboard":
     render_intraday_boost(selected_date)
-elif page == "Sector View":
+elif page == "📊 Sector View":
     render_sector_view()
-
