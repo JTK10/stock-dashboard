@@ -15,13 +15,24 @@ import gc
 gc.collect()
 
 # --- 1. PAGE CONFIG ---
-st.set_page_config(page_title="SignalX Dashboard", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="Market Radar", layout="wide", page_icon="📡")
 
 # --- CONFIG ---
 AWS_REGION = os.getenv("AWS_REGION", "ap-south-1") 
 DYNAMODB_TABLE = os.getenv("DYNAMODB_TABLE", "SentAlerts")
-NSE_OI_TABLE = "NSE_OI_DATA" # Table name for Sector Data
+NSE_OI_TABLE = "NSE_OI_DATA" 
 DEFAULT_EXCHANGE = "NSE"
+
+# === OBFUSCATION MAPPING (THE "MASK") ===
+# This hides the standard F&O terminology from the frontend user
+SIGNAL_MASK = {
+    "LONG_BUILDUP": "ACCUMULATION",
+    "SHORT_BUILDUP": "DISTRIBUTION",
+    "SHORT_COVERING": "RECOVERY",
+    "LONG_UNWINDING": "LIQUIDATION",
+    "NEUTRAL": "STABLE",
+    "N/A": "-"
+}
 
 # === TRADINGVIEW MAPPING ===
 TICKER_CORRECTIONS = {
@@ -223,7 +234,7 @@ def load_data_from_dynamodb(target_date, signal_type=None):
         if 'Signal' in df.columns:
              df['Direction'] = df['Signal'].map({'LONG': 'LONG', 'SHORT': 'SHORT'})
 
-    # --- OI FIELDS SAFE LOAD (UPDATED FOR NEW LAMBDA) ---
+    # --- SAFE LOAD ---
     if 'OI_Signal' not in df.columns: df['OI_Signal'] = "N/A"
     if 'Confidence' not in df.columns: df['Confidence'] = "N/A"
     if 'OI_Type' not in df.columns: df['OI_Type'] = "CHG"
@@ -239,6 +250,12 @@ def load_data_from_dynamodb(target_date, signal_type=None):
     
     if 'BreakType' not in df.columns: df['BreakType'] = "N/A"
     
+    # --- OBFUSCATE SIGNALS FOR UI ---
+    if 'OI_Signal' in df.columns:
+        df['Display_Phase'] = df['OI_Signal'].map(SIGNAL_MASK).fillna("STABLE")
+    else:
+        df['Display_Phase'] = "STABLE"
+
     return df
 
 @st.cache_data(ttl=60)
@@ -310,7 +327,7 @@ def metric_card(title, value, subtitle=None, color="#e5e7eb", glow=False):
     """
 
 # =========================================================
-# PAGE 1: LIVE ALERTS (BLASTS & FLOWS)
+# PAGE 1: LIVE RADAR (Formerly Blasts)
 # =========================================================
 def render_live_alerts(selected_date):
     # CSS & AUTO REFRESH
@@ -327,30 +344,28 @@ def render_live_alerts(selected_date):
     </style>
     """, unsafe_allow_html=True)
 
-    st.subheader("🚀 Live OI Blasts & High Flows")
+    st.subheader("🚀 Live Market Radar")
     
     # --- DATA ---
-    # Query INTRADAY_BOOST but filter for the high quality ones
     df = load_data_from_dynamodb(selected_date, "INTRADAY_BOOST")
     
     if df.empty:
-        st.info(f"No data found for {selected_date}")
+        st.info(f"No signals found for {selected_date}")
         return
 
-    # --- FILTER FOR BLASTS & HIGH CONFIDENCE ---
-    # Logic: Either it has "BLAST" in notes OR it's High Confidence with big OI Change
+    # --- FILTER (Using Hidden Logic) ---
     blast_mask = df['Boost_Notes'].str.contains("BLAST", case=False, na=False)
     flow_mask = (df['Confidence'] == "HIGH") & (df['OI_Change'].abs() > 15)
     
     alerts_df = df[blast_mask | flow_mask].copy()
 
     if alerts_df.empty:
-        st.info("No 'Blast' or 'High Conviction' alerts yet today. Market might be quiet.")
+        st.info("Market Radar is quiet. No high-conviction signals yet.")
         return
 
     # Fetch Live Prices
     loading_placeholder = st.empty()
-    loading_placeholder.text(f'⚡ Fetching Prices for {selected_date}...')
+    loading_placeholder.text(f'⚡ Syncing Market Data for {selected_date}...')
     alerts_df = fetch_live_updates(alerts_df, selected_date)
     loading_placeholder.empty()
 
@@ -361,22 +376,23 @@ def render_live_alerts(selected_date):
     alerts_df['Live_Move_Pct'] = alerts_df['Live_Move_Pct'].fillna(0.0)
     alerts_df['Visual_Side'] = alerts_df['Direction'].map({'LONG': '🟢 LONG', 'SHORT': '🔴 SHORT'})
     
-    # Identify Type
+    # Identify Type (Renamed)
     def get_type(row):
-        if "BLAST" in str(row['Boost_Notes']): return "🚀 BLAST"
-        return "🌊 FLOW"
+        # Hiding "Blast" term
+        if "BLAST" in str(row['Boost_Notes']): return "⚡ VELOCITY SPIKE" 
+        return "🌊 TREND SURGE"
     
     alerts_df['Type'] = alerts_df.apply(get_type, axis=1)
 
     # --- METRICS ---
     total_alerts = len(alerts_df)
-    blast_count = len(alerts_df[alerts_df['Type'] == "🚀 BLAST"])
-    flow_count = len(alerts_df[alerts_df['Type'] == "🌊 FLOW"])
+    blast_count = len(alerts_df[alerts_df['Type'] == "⚡ VELOCITY SPIKE"])
+    flow_count = len(alerts_df[alerts_df['Type'] == "🌊 TREND SURGE"])
     
     c1, c2, c3 = st.columns(3)
-    c1.markdown(metric_card("Total Alerts", total_alerts, "Significant Moves", "#eab308", glow=True), unsafe_allow_html=True)
-    c2.markdown(metric_card("OI Blasts", blast_count, "Hidden Accumulation", "#60a5fa"), unsafe_allow_html=True)
-    c3.markdown(metric_card("High Flows", flow_count, ">15% OI Change", "#22c55e"), unsafe_allow_html=True)
+    c1.markdown(metric_card("Active Signals", total_alerts, "Total Detections", "#eab308", glow=True), unsafe_allow_html=True)
+    c2.markdown(metric_card("Velocity Spikes", blast_count, "Anomalies", "#60a5fa"), unsafe_allow_html=True)
+    c3.markdown(metric_card("Trend Strength", flow_count, "High Vigor", "#22c55e"), unsafe_allow_html=True)
 
     st.divider()
 
@@ -387,38 +403,38 @@ def render_live_alerts(selected_date):
         alerts_df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + alerts_df['TV_Symbol']
 
     with st.container(border=True):
-        st.markdown('<div class="table-header">🔥 Active Signals</div>', unsafe_allow_html=True)
+        st.markdown('<div class="table-header">📡 Detected Signals</div>', unsafe_allow_html=True)
         
-        # Sort by Time (Latest First)
         if 'Time' in alerts_df.columns:
             alerts_df = alerts_df.sort_values(by='Time', ascending=False)
             
         st.data_editor(
-            alerts_df[['Chart', 'Time', 'Name', 'Type', 'Visual_Side', 'SignalPrice', 'Delta_OI', 'OI_Change', 'TargetLevel']], 
+            # Using OBFUSCATED Display_Phase instead of OI_Signal
+            alerts_df[['Chart', 'Time', 'Name', 'Type', 'Visual_Side', 'SignalPrice', 'Delta_OI', 'OI_Change', 'Display_Phase']], 
             column_config={
                 "Chart": st.column_config.LinkColumn("View", display_text="📊", width="small"),
-                "Time": st.column_config.TextColumn("Entry Time", width="small"),
+                "Time": st.column_config.TextColumn("Time", width="small"),
                 "Name": st.column_config.TextColumn("Ticker", width="medium"),
-                "Type": st.column_config.TextColumn("Alert Type", width="small"),
+                "Type": st.column_config.TextColumn("Signal Type", width="medium"),
                 "Visual_Side": st.column_config.TextColumn("Side", width="small"),
                 "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
-                "Delta_OI": st.column_config.NumberColumn("5m OI Surge", format="%.2f%%"),
-                "OI_Change": st.column_config.NumberColumn("Total OI %", format="%.2f%%"),
-                "TargetLevel": st.column_config.TextColumn("Target"),
+                "Delta_OI": st.column_config.NumberColumn("Impulse (5m)", format="%.2f"), # Hiding "OI Surge"
+                "OI_Change": st.column_config.NumberColumn("Activity Index", format="%.2f"), # Hiding "OI Change"
+                "Display_Phase": st.column_config.TextColumn("Phase Structure"), # Hiding "Long Buildup" etc
             },
             hide_index=True, use_container_width=True, disabled=True, key="alerts_table"
         )
 
 # =========================================================
-# PAGE 2: MARKET LEADERBOARD (FULL LIST)
+# PAGE 2: VELOCITY LEADERBOARD (Formerly Intraday Boost)
 # =========================================================
 def render_intraday_boost(selected_date):
-    st.header("📈 Market Leaderboard (Intraday Boost)")
-    st.info("Full list of Top Gainers/Losers monitored for Flows.")
+    st.header("📈 Market Velocity")
+    st.info("Real-time momentum and structural breakdown.")
 
     df = load_data_from_dynamodb(selected_date, "INTRADAY_BOOST")
     if df.empty:
-        st.warning("No Boost alerts found.")
+        st.warning("No data found.")
         return
 
     # 1. Prepare Chart Links
@@ -436,7 +452,7 @@ def render_intraday_boost(selected_date):
 
     st.markdown("### 🔥 Market Context")
 
-    # 3. Classification Logic (Bulls vs Bears)
+    # 3. Classification Logic
     def classify_boost_side(row):
         r_type = str(row.get('RankType', '')).upper()
         if 'TOP GAINER' in r_type: return 'LONG'
@@ -459,11 +475,11 @@ def render_intraday_boost(selected_date):
 
     col1, col2 = st.columns(2)
 
-    # --- DISPLAY COLUMNS (Added Delta_OI for context) ---
-    display_cols = ['Chart', 'Name', 'SignalPrice', 'BreakType', 'OI_Signal', 'OI_Change']
+    # --- DISPLAY COLUMNS (Renaming OI columns) ---
+    display_cols = ['Chart', 'Name', 'SignalPrice', 'BreakType', 'Display_Phase', 'OI_Change']
 
     with col1:
-        st.markdown("#### 🟢 Top Gainers & Breakouts")
+        st.markdown("#### 🟢 Velocity Gainers")
         if not df_bull.empty:
             st.data_editor(
                 df_bull[display_cols],
@@ -472,8 +488,8 @@ def render_intraday_boost(selected_date):
                     "Name": st.column_config.TextColumn("Name", width="medium"),
                     "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
                     "BreakType": st.column_config.TextColumn("Status"),
-                    "OI_Signal": st.column_config.TextColumn("OI Context"),
-                    "OI_Change": st.column_config.NumberColumn("OI% Change", format="%.2f%%")
+                    "Display_Phase": st.column_config.TextColumn("Structure"),
+                    "OI_Change": st.column_config.NumberColumn("Part. Index", format="%.2f")
                 },
                 use_container_width=True, hide_index=True, disabled=True, key="bull_table"
             )
@@ -481,7 +497,7 @@ def render_intraday_boost(selected_date):
             st.caption("No Bullish setups found.")
 
     with col2:
-        st.markdown("#### 🔴 Top Losers & Breakdowns")
+        st.markdown("#### 🔴 Velocity Losers")
         if not df_bear.empty:
             st.data_editor(
                 df_bear[display_cols],
@@ -490,8 +506,8 @@ def render_intraday_boost(selected_date):
                     "Name": st.column_config.TextColumn("Name", width="medium"),
                     "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
                     "BreakType": st.column_config.TextColumn("Status"),
-                    "OI_Signal": st.column_config.TextColumn("OI Context"),
-                    "OI_Change": st.column_config.NumberColumn("OI% Change", format="%.2f%%")
+                    "Display_Phase": st.column_config.TextColumn("Structure"),
+                    "OI_Change": st.column_config.NumberColumn("Part. Index", format="%.2f")
                 },
                 use_container_width=True, hide_index=True, disabled=True, key="bear_table"
             )
@@ -499,28 +515,22 @@ def render_intraday_boost(selected_date):
             st.caption("No Bearish setups found.")
 
 # =========================================================
-# PAGE 3: SECTOR VIEW (RAW DATA)
+# PAGE 3: SECTOR VIEW
 # =========================================================
 def render_sector_view():
-    st.header("📊 Sector Participation View")
+    st.header("📊 Sector Heatmap")
     
-    # 1. Load Data
     df = load_nse_sector_data()
     if df.empty:
-        st.warning("No NSE OI Data found. Please check if the scraper is running.")
+        st.warning("No Data found.")
         return
 
-    # 2. Process Data
-    # Map Sectors
     df['Sector'] = df['symbol'].map(SECTOR_MAP).fillna('Others')
-    
-    # Ensure Numeric Types
     cols_to_fix = ['pChangeInOpenInterest', 'lastPrice', 'changeinOpenInterest']
     for col in cols_to_fix:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-    # 3. Sector Aggregation
     sector_stats = df.groupby('Sector')['pChangeInOpenInterest'].mean().reset_index()
     sector_stats = sector_stats.sort_values('pChangeInOpenInterest', ascending=False)
     
@@ -530,25 +540,26 @@ def render_sector_view():
     final_sector = pd.merge(sector_stats, sector_counts, on='Sector')
     final_sector = final_sector[final_sector['Sector'] != 'Others']
 
-    # 4. Visualization
-    st.subheader("🔥 Sector Heatmap (Avg OI Change %)")
+    st.subheader("🔥 Sector Activity")
     st.bar_chart(final_sector.set_index('Sector')['pChangeInOpenInterest'])
 
-    # 5. Deep Dive Table
     col1, col2 = st.columns([1, 2])
     
     with col1:
-        st.markdown("### 🏆 Top Sectors")
+        st.markdown("### 🏆 Leading Sectors")
         st.dataframe(
-            final_sector.style.format({"pChangeInOpenInterest": "{:.2f}%"}),
+            final_sector.style.format({"pChangeInOpenInterest": "{:.2f}"}),
             column_order=("Sector", "pChangeInOpenInterest", "Stock_Count"),
+            column_config={
+                "pChangeInOpenInterest": "Activity Score"
+            },
             hide_index=True,
             use_container_width=True
         )
 
     with col2:
-        st.markdown("### 🔍 Stock Drilldown")
-        selected_sector = st.selectbox("Select Sector to Inspect", final_sector['Sector'].unique())
+        st.markdown("### 🔍 Drilldown")
+        selected_sector = st.selectbox("Select Sector", final_sector['Sector'].unique())
         
         subset = df[df['Sector'] == selected_sector].copy()
         subset = subset.sort_values('pChangeInOpenInterest', ascending=False)
@@ -557,8 +568,8 @@ def render_sector_view():
             subset[['symbol', 'pChangeInOpenInterest', 'openInterest', 'lastPrice']],
             column_config={
                 "symbol": "Stock",
-                "pChangeInOpenInterest": st.column_config.NumberColumn("OI Chg %", format="%.2f%%"),
-                "openInterest": st.column_config.NumberColumn("Total OI", format="%d"),
+                "pChangeInOpenInterest": st.column_config.NumberColumn("Activity", format="%.2f"),
+                "openInterest": st.column_config.NumberColumn("Volume Depth", format="%d"),
                 "lastPrice": st.column_config.NumberColumn("Price", format="%.2f"),
             },
             hide_index=True,
@@ -577,10 +588,6 @@ with st.sidebar:
 <stop offset="0%" style="stop-color:#00F260;stop-opacity:1" />
 <stop offset="100%" style="stop-color:#0575E6;stop-opacity:1" />
 </linearGradient>
-<linearGradient id="bearGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-<stop offset="0%" style="stop-color:#FF416C;stop-opacity:1" />
-<stop offset="100%" style="stop-color:#FF4B2B;stop-opacity:1" />
-</linearGradient>
 <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
 <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
 <feMerge>
@@ -589,28 +596,21 @@ with st.sidebar:
 </feMerge>
 </filter>
 </defs>
-<g filter="url(#glow)">
-<path d="M15 15 C 30 15, 45 55, 65 65" stroke="url(#bearGradient)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M65 65 L 50 63 M 65 65 L 63 50" stroke="url(#bearGradient)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M15 65 C 30 65, 45 25, 65 15" stroke="url(#bullGradient)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M65 15 L 50 17 M 65 15 L 63 30" stroke="url(#bullGradient)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-</g>
-<text x="85" y="52" fill="#FFFFFF" font-family="'Inter', sans-serif" font-weight="700" font-size="42" letter-spacing="-1">Signal</text>
-<text x="215" y="52" fill="url(#bullGradient)" font-family="'Inter', sans-serif" font-weight="700" font-size="42" letter-spacing="-1">X</text>
+<text x="10" y="52" fill="url(#bullGradient)" font-family="'Inter', sans-serif" font-weight="700" font-size="42" letter-spacing="-1">QUANT</text>
+<text x="170" y="52" fill="#FFFFFF" font-family="'Inter', sans-serif" font-weight="700" font-size="42" letter-spacing="-1">RADAR</text>
 </svg>
 </div>
 """, unsafe_allow_html=True)
     
     st.divider()
-    # RENAMED PAGE 1 to reflect new logic
-    page = st.radio("Navigate", ["🚀 Live Alerts (Blasts)", "📈 Market Leaderboard", "📊 Sector View"])
+    page = st.radio("Navigate", ["🚀 Live Radar", "📈 Market Velocity", "📊 Sector Heatmap"])
     st.divider()
     india_tz = pytz.timezone('Asia/Kolkata')
     selected_date = st.date_input("📅 Select Date", datetime.now(india_tz).date())
 
-if page == "🚀 Live Alerts (Blasts)":
+if page == "🚀 Live Radar":
     render_live_alerts(selected_date)
-elif page == "📈 Market Leaderboard":
+elif page == "📈 Market Velocity":
     render_intraday_boost(selected_date)
-elif page == "📊 Sector View":
+elif page == "📊 Sector Heatmap":
     render_sector_view()
