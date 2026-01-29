@@ -24,7 +24,6 @@ NSE_OI_TABLE = "NSE_OI_DATA"
 DEFAULT_EXCHANGE = "NSE"
 
 # === OBFUSCATION MAPPING (THE "MASK") ===
-# This hides the standard F&O terminology from the frontend user
 SIGNAL_MASK = {
     "LONG_BUILDUP": "ACCUMULATION",
     "SHORT_BUILDUP": "DISTRIBUTION",
@@ -149,39 +148,31 @@ TICKER_CORRECTIONS = {
 
 # --- SECTOR MAPPING FOR NSE DATA ---
 SECTOR_MAP = {
-    # BANKING & FINANCE
     "HDFCBANK": "Banking", "ICICIBANK": "Banking", "SBIN": "Banking", "AXISBANK": "Banking",
     "KOTAKBANK": "Banking", "INDUSINDBK": "Banking", "BANKBARODA": "Banking", "PNB": "Banking",
     "AUBANK": "Banking", "BANDHANBNK": "Banking", "FEDERALBNK": "Banking", "IDFCFIRSTB": "Banking",
     "RBLBANK": "Banking", "BAJFINANCE": "Finance", "BAJAJFINSV": "Finance", "CHOLAFIN": "Finance",
     "SHRIRAMFIN": "Finance", "MUTHOOTFIN": "Finance", "SBICARD": "Finance", "PEL": "Finance",
     "MANAPPURAM": "Finance", "L&TFH": "Finance", "M&MFIN": "Finance", "PFC": "Finance", "RECLTD": "Finance",
-    # IT & TECH
     "TCS": "IT", "INFY": "IT", "HCLTECH": "IT", "WIPRO": "IT", "TECHM": "IT", "LTIM": "IT",
     "LTTS": "IT", "PERSISTENT": "IT", "COFORGE": "IT", "MPHASIS": "IT", "TATAELXSI": "IT",
     "OFSS": "IT", "KPITTECH": "IT",
-    # AUTO & ANCILLARY
     "MARUTI": "Auto", "TATAMOTORS": "Auto", "M&M": "Auto", "BAJAJ-AUTO": "Auto", "EICHERMOT": "Auto",
     "HEROMOTOCO": "Auto", "TVSMOTOR": "Auto", "ASHOKLEY": "Auto", "BHARATFORG": "Auto",
     "BALKRISIND": "Auto", "MRF": "Auto", "APOLLOTYRE": "Auto", "MOTHERSON": "Auto", "BOSCHLTD": "Auto",
-    # ENERGY & POWER
     "RELIANCE": "Oil & Gas", "ONGC": "Oil & Gas", "BPCL": "Oil & Gas", "IOC": "Oil & Gas", "HPCL": "Oil & Gas",
     "GAIL": "Oil & Gas", "PETRONET": "Oil & Gas", "NTPC": "Power", "POWERGRID": "Power", "TATAPOWER": "Power",
     "ADANIGREEN": "Power", "ADANIENSOL": "Power", "JSWENERGY": "Power", "NHPC": "Power",
-    # CONSUMER & FMCG
     "ITC": "FMCG", "HINDUNILVR": "FMCG", "NESTLEIND": "FMCG", "BRITANNIA": "FMCG", "TATACONSUM": "FMCG",
     "DABUR": "FMCG", "GODREJCP": "FMCG", "MARICO": "FMCG", "COLPAL": "FMCG", "VBL": "FMCG",
     "ASIANPAINT": "Consumer", "BERGEPAINT": "Consumer", "PIDILITIND": "Consumer", "TITAN": "Consumer",
     "HAVELLS": "Consumer", "VOLTAS": "Consumer", "WHIRLPOOL": "Consumer", "PAGEIND": "Consumer", "TRENT": "Consumer",
-    # PHARMA & HEALTHCARE
     "SUNPHARMA": "Pharma", "CIPLA": "Pharma", "DRREDDY": "Pharma", "DIVISLAB": "Pharma", "TORNTPHARM": "Pharma",
     "LUPIN": "Pharma", "AUROPHARMA": "Pharma", "ALKEM": "Pharma", "BIOCON": "Pharma", "SYNGENE": "Pharma",
     "GLENMARK": "Pharma", "GRANULES": "Pharma", "LAURUSLABS": "Pharma", "APOLLOHOSP": "Healthcare", 
     "METROPOLIS": "Healthcare", "LALPATHLAB": "Healthcare",
-    # METALS & MINING
     "TATASTEEL": "Metals", "JSWSTEEL": "Metals", "HINDALCO": "Metals", "VEDL": "Metals", "JINDALSTEL": "Metals",
     "SAIL": "Metals", "NMDC": "Metals", "NATIONALUM": "Metals", "COALINDIA": "Metals", "HINDZINC": "Metals",
-    # REALTY & INFRA
     "DLF": "Realty", "GODREJPROP": "Realty", "OBEROIRLTY": "Realty", "PHOENIXLTD": "Realty", "PRESTIGE": "Realty",
     "LODHA": "Realty", "LT": "Infra", "HAL": "Defence", "BEL": "Defence", "MAZDOCK": "Defence", "COCHINSHIP": "Defence",
     "BDL": "Defence", "IRCTC": "Railways", "CONCOR": "Logistics", "INDIGO": "Aviation",
@@ -447,6 +438,7 @@ def render_intraday_boost(selected_date):
     if 'SignalPrice' in df.columns: df['SignalPrice'] = pd.to_numeric(df['SignalPrice'], errors='coerce')
     if 'RS_Score' in df.columns: df['RS_Score'] = pd.to_numeric(df['RS_Score'], errors='coerce')
     if 'OI_Change' in df.columns: df['OI_Change'] = pd.to_numeric(df['OI_Change'], errors='coerce')
+    if 'Delta_OI' in df.columns: df['Delta_OI'] = pd.to_numeric(df['Delta_OI'], errors='coerce') # Ensure Delta_OI is numeric
     
     if 'Rank' in df.columns: df = df.sort_values(by='Rank', ascending=True)
 
@@ -475,8 +467,8 @@ def render_intraday_boost(selected_date):
 
     col1, col2 = st.columns(2)
 
-    # --- DISPLAY COLUMNS (Renaming OI columns) ---
-    display_cols = ['Chart', 'Name', 'SignalPrice', 'BreakType', 'Display_Phase', 'OI_Change']
+    # --- DISPLAY COLUMNS (Added Delta_OI) ---
+    display_cols = ['Chart', 'Name', 'SignalPrice', 'BreakType', 'Display_Phase', 'OI_Change', 'Delta_OI']
 
     with col1:
         st.markdown("#### 🟢 Velocity Gainers")
@@ -489,7 +481,8 @@ def render_intraday_boost(selected_date):
                     "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
                     "BreakType": st.column_config.TextColumn("Status"),
                     "Display_Phase": st.column_config.TextColumn("Structure"),
-                    "OI_Change": st.column_config.NumberColumn("Part. Index", format="%.2f")
+                    "OI_Change": st.column_config.NumberColumn("Part. Index", format="%.2f"),
+                    "Delta_OI": st.column_config.NumberColumn("Impulse (5m)", format="%.2f") # ADDED HERE
                 },
                 use_container_width=True, hide_index=True, disabled=True, key="bull_table"
             )
@@ -507,7 +500,8 @@ def render_intraday_boost(selected_date):
                     "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
                     "BreakType": st.column_config.TextColumn("Status"),
                     "Display_Phase": st.column_config.TextColumn("Structure"),
-                    "OI_Change": st.column_config.NumberColumn("Part. Index", format="%.2f")
+                    "OI_Change": st.column_config.NumberColumn("Part. Index", format="%.2f"),
+                    "Delta_OI": st.column_config.NumberColumn("Impulse (5m)", format="%.2f") # ADDED HERE
                 },
                 use_container_width=True, hide_index=True, disabled=True, key="bear_table"
             )
@@ -607,6 +601,11 @@ with st.sidebar:
     st.divider()
     india_tz = pytz.timezone('Asia/Kolkata')
     selected_date = st.date_input("📅 Select Date", datetime.now(india_tz).date())
+    
+    # ADDED: Cache Clear Button
+    if st.button("🔄 Clear Cache (Fix Blanks)"):
+        st.cache_data.clear()
+        st.rerun()
 
 if page == "🚀 Live Radar":
     render_live_alerts(selected_date)
