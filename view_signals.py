@@ -344,11 +344,13 @@ def render_live_alerts(selected_date):
         st.info(f"No signals found for {selected_date}")
         return
 
-    # --- FILTER (Using Hidden Logic) ---
+    # --- FILTER (UPDATED FOR STAIRCASE) ---
     blast_mask = df['Boost_Notes'].str.contains("BLAST", case=False, na=False)
+    stair_mask = df['Boost_Notes'].str.contains("STAIRCSE", case=False, na=False) # <--- ADDED
     flow_mask = (df['Confidence'] == "HIGH") & (df['OI_Change'].abs() > 15)
     
-    alerts_df = df[blast_mask | flow_mask].copy()
+    # Combine masks to include Staircase alerts even if OI < 15%
+    alerts_df = df[blast_mask | stair_mask | flow_mask].copy()
 
     if alerts_df.empty:
         st.info("Market Radar is quiet. No high-conviction signals yet.")
@@ -367,23 +369,26 @@ def render_live_alerts(selected_date):
     alerts_df['Live_Move_Pct'] = alerts_df['Live_Move_Pct'].fillna(0.0)
     alerts_df['Visual_Side'] = alerts_df['Direction'].map({'LONG': '🟢 LONG', 'SHORT': '🔴 SHORT'})
     
-    # Identify Type (Renamed)
+    # Identify Type (UPDATED LABELS)
     def get_type(row):
-        # Hiding "Blast" term
-        if "BLAST" in str(row['Boost_Notes']): return "⚡ VELOCITY SPIKE" 
+        notes = str(row['Boost_Notes'])
+        if "BLAST" in notes: return "⚡ VELOCITY SPIKE" 
+        if "STAIRCSE" in notes: return "🪜 STAIRCASE ACCUM." # <--- ADDED LABEL
         return "🌊 TREND SURGE"
     
     alerts_df['Type'] = alerts_df.apply(get_type, axis=1)
 
-    # --- METRICS ---
+    # --- METRICS (UPDATED CARD LAYOUT) ---
     total_alerts = len(alerts_df)
     blast_count = len(alerts_df[alerts_df['Type'] == "⚡ VELOCITY SPIKE"])
     flow_count = len(alerts_df[alerts_df['Type'] == "🌊 TREND SURGE"])
+    stair_count = len(alerts_df[alerts_df['Type'] == "🪜 STAIRCASE ACCUM."]) # <--- NEW COUNT
     
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4) # Changed to 4 cols
     c1.markdown(metric_card("Active Signals", total_alerts, "Total Detections", "#eab308", glow=True), unsafe_allow_html=True)
     c2.markdown(metric_card("Velocity Spikes", blast_count, "Anomalies", "#60a5fa"), unsafe_allow_html=True)
-    c3.markdown(metric_card("Trend Strength", flow_count, "High Vigor", "#22c55e"), unsafe_allow_html=True)
+    c3.markdown(metric_card("Staircase", stair_count, "Steady Flow", "#a855f7"), unsafe_allow_html=True) # <--- NEW CARD
+    c4.markdown(metric_card("Trend Strength", flow_count, "High Vigor", "#22c55e"), unsafe_allow_html=True)
 
     st.divider()
 
@@ -409,9 +414,9 @@ def render_live_alerts(selected_date):
                 "Type": st.column_config.TextColumn("Signal Type", width="medium"),
                 "Visual_Side": st.column_config.TextColumn("Side", width="small"),
                 "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
-                "Delta_OI": st.column_config.NumberColumn("Impulse (5m)", format="%.2f"), # Hiding "OI Surge"
-                "OI_Change": st.column_config.NumberColumn("Activity Index", format="%.2f"), # Hiding "OI Change"
-                "Display_Phase": st.column_config.TextColumn("Phase Structure"), # Hiding "Long Buildup" etc
+                "Delta_OI": st.column_config.NumberColumn("Impulse (5m)", format="%.2f"), 
+                "OI_Change": st.column_config.NumberColumn("Activity Index", format="%.2f"), 
+                "Display_Phase": st.column_config.TextColumn("Phase Structure"), 
             },
             hide_index=True, use_container_width=True, disabled=True, key="alerts_table"
         )
@@ -438,7 +443,7 @@ def render_intraday_boost(selected_date):
     if 'SignalPrice' in df.columns: df['SignalPrice'] = pd.to_numeric(df['SignalPrice'], errors='coerce')
     if 'RS_Score' in df.columns: df['RS_Score'] = pd.to_numeric(df['RS_Score'], errors='coerce')
     if 'OI_Change' in df.columns: df['OI_Change'] = pd.to_numeric(df['OI_Change'], errors='coerce')
-    if 'Delta_OI' in df.columns: df['Delta_OI'] = pd.to_numeric(df['Delta_OI'], errors='coerce') # Ensure Delta_OI is numeric
+    if 'Delta_OI' in df.columns: df['Delta_OI'] = pd.to_numeric(df['Delta_OI'], errors='coerce') 
     
     if 'Rank' in df.columns: df = df.sort_values(by='Rank', ascending=True)
 
@@ -467,7 +472,7 @@ def render_intraday_boost(selected_date):
 
     col1, col2 = st.columns(2)
 
-    # --- DISPLAY COLUMNS (Added Delta_OI) ---
+    # --- DISPLAY COLUMNS ---
     display_cols = ['Chart', 'Name', 'SignalPrice', 'BreakType', 'Display_Phase', 'OI_Change', 'Delta_OI']
 
     with col1:
@@ -482,7 +487,7 @@ def render_intraday_boost(selected_date):
                     "BreakType": st.column_config.TextColumn("Status"),
                     "Display_Phase": st.column_config.TextColumn("Structure"),
                     "OI_Change": st.column_config.NumberColumn("Part. Index", format="%.2f"),
-                    "Delta_OI": st.column_config.NumberColumn("Impulse (5m)", format="%.2f") # ADDED HERE
+                    "Delta_OI": st.column_config.NumberColumn("Impulse (5m)", format="%.2f") 
                 },
                 use_container_width=True, hide_index=True, disabled=True, key="bull_table"
             )
@@ -501,7 +506,7 @@ def render_intraday_boost(selected_date):
                     "BreakType": st.column_config.TextColumn("Status"),
                     "Display_Phase": st.column_config.TextColumn("Structure"),
                     "OI_Change": st.column_config.NumberColumn("Part. Index", format="%.2f"),
-                    "Delta_OI": st.column_config.NumberColumn("Impulse (5m)", format="%.2f") # ADDED HERE
+                    "Delta_OI": st.column_config.NumberColumn("Impulse (5m)", format="%.2f") 
                 },
                 use_container_width=True, hide_index=True, disabled=True, key="bear_table"
             )
@@ -602,7 +607,6 @@ with st.sidebar:
     india_tz = pytz.timezone('Asia/Kolkata')
     selected_date = st.date_input("📅 Select Date", datetime.now(india_tz).date())
     
-    # ADDED: Cache Clear Button
     if st.button("🔄 Clear Cache (Fix Blanks)"):
         st.cache_data.clear()
         st.rerun()
