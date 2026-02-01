@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import boto3
-from boto3.dynamodb.conditions import Attr
+from boto3.dynamodb.conditions import Attr, Key
 import os
 import json
 from decimal import Decimal
@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 import pytz
 import yfinance as yf
 from streamlit_autorefresh import st_autorefresh
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import gc 
 
 # --- 0. MEMORY CLEANUP ---
@@ -250,6 +252,61 @@ def load_data_from_dynamodb(target_date, signal_type=None):
     return df
 
 @st.cache_data(ttl=60)
+def load_history_data(target_date):
+    """Fetches the full timeline history for the day (for Deep Dive view)"""
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
+        table = dynamodb.Table(DYNAMODB_TABLE)
+        pk = f"HISTORY#BOOST#{target_date.isoformat()}"
+        response = table.query(
+            KeyConditionExpression=Key('PK').eq(pk)
+        )
+        items = response.get('Items', [])
+        while 'LastEvaluatedKey' in response:
+            response = table.query(
+                KeyConditionExpression=Key('PK').eq(pk),
+                ExclusiveStartKey=response['LastEvaluatedKey']
+            )
+            items.extend(response.get('Items', []))
+        return items
+    except Exception as e:
+        st.error(f"Error fetching history: {e}")
+        return []
+
+def get_stock_time_series(target_date, stock_name):
+    """Extracts time series for a single stock from the history blob"""
+    items = load_history_data(target_date)
+    data_points = []
+    
+    for item in items:
+        time_str = item.get('SK')
+        try:
+            # The backend saves 'Data' as a JSON string
+            raw_data = item.get('Data')
+            if isinstance(raw_data, str):
+                snapshot = json.loads(raw_data)
+                # Double decode check
+                if isinstance(snapshot, str): snapshot = json.loads(snapshot)
+                
+                if isinstance(snapshot, list):
+                    for stock in snapshot:
+                        if stock.get('Name') == stock_name:
+                            data_points.append({
+                                'Time': time_str,
+                                'OI_Change': float(stock.get('OI_Change', 0)),
+                                'SignalPrice': float(stock.get('SignalPrice', 0)),
+                                'NetMovePct': float(stock.get('NetMovePct', 0))
+                            })
+        except:
+            continue
+    
+    if not data_points:
+        return pd.DataFrame()
+        
+    df = pd.DataFrame(data_points)
+    return df.sort_values('Time')
+
+@st.cache_data(ttl=60)
 def load_nse_sector_data():
     """Loads Raw NSE Data from NSE_OI_DATA Table for Sector View"""
     try:
@@ -346,7 +403,7 @@ def render_live_alerts(selected_date):
 
     # --- FILTER (UPDATED FOR STAIRCASE) ---
     blast_mask = df['Boost_Notes'].str.contains("BLAST", case=False, na=False)
-    stair_mask = df['Boost_Notes'].str.contains("STAIRCSE", case=False, na=False) # <--- ADDED
+    stair_mask = df['Boost_Notes'].str.contains("STAIRCSE", case=False, na=False) 
     flow_mask = (df['Confidence'] == "HIGH") & (df['OI_Change'].abs() > 15)
     
     # Combine masks to include Staircase alerts even if OI < 15%
@@ -373,7 +430,7 @@ def render_live_alerts(selected_date):
     def get_type(row):
         notes = str(row['Boost_Notes'])
         if "BLAST" in notes: return "⚡ VELOCITY SPIKE" 
-        if "STAIRCSE" in notes: return "🪜 STAIRCASE ACCUM." # <--- ADDED LABEL
+        if "STAIRCSE" in notes: return "🪜 STAIRCASE ACCUM." 
         return "🌊 TREND SURGE"
     
     alerts_df['Type'] = alerts_df.apply(get_type, axis=1)
@@ -382,12 +439,12 @@ def render_live_alerts(selected_date):
     total_alerts = len(alerts_df)
     blast_count = len(alerts_df[alerts_df['Type'] == "⚡ VELOCITY SPIKE"])
     flow_count = len(alerts_df[alerts_df['Type'] == "🌊 TREND SURGE"])
-    stair_count = len(alerts_df[alerts_df['Type'] == "🪜 STAIRCASE ACCUM."]) # <--- NEW COUNT
+    stair_count = len(alerts_df[alerts_df['Type'] == "🪜 STAIRCASE ACCUM."]) 
     
-    c1, c2, c3, c4 = st.columns(4) # Changed to 4 cols
+    c1, c2, c3, c4 = st.columns(4) 
     c1.markdown(metric_card("Active Signals", total_alerts, "Total Detections", "#eab308", glow=True), unsafe_allow_html=True)
     c2.markdown(metric_card("Velocity Spikes", blast_count, "Anomalies", "#60a5fa"), unsafe_allow_html=True)
-    c3.markdown(metric_card("Staircase", stair_count, "Steady Flow", "#a855f7"), unsafe_allow_html=True) # <--- NEW CARD
+    c3.markdown(metric_card("Staircase", stair_count, "Steady Flow", "#a855f7"), unsafe_allow_html=True) 
     c4.markdown(metric_card("Trend Strength", flow_count, "High Vigor", "#22c55e"), unsafe_allow_html=True)
 
     st.divider()
@@ -405,7 +462,6 @@ def render_live_alerts(selected_date):
             alerts_df = alerts_df.sort_values(by='Time', ascending=False)
             
         st.data_editor(
-            # Using OBFUSCATED Display_Phase instead of OI_Signal
             alerts_df[['Chart', 'Time', 'Name', 'Type', 'Visual_Side', 'SignalPrice', 'Delta_OI', 'OI_Change', 'Display_Phase']], 
             column_config={
                 "Chart": st.column_config.LinkColumn("View", display_text="📊", width="small"),
@@ -576,6 +632,107 @@ def render_sector_view():
         )
 
 # =========================================================
+# PAGE 4: DEEP DIVE (STRUCTURAL ANALYSIS)
+# =========================================================
+def render_deep_dive_view(selected_date):
+    st.header("🔬 Deep Dive: Structural Analysis")
+    st.info("Visualizing the 'Staircase' accumulation patterns and Price vs. OI correlation.")
+    
+    # 1. Get List of Stocks Active Today (from Live Data)
+    df_live = load_data_from_dynamodb(selected_date, "INTRADAY_BOOST")
+    if df_live.empty:
+        st.info("No data available for this date.")
+        return
+        
+    if 'Name' not in df_live.columns: return
+    
+    # Create a list of stocks labeled with their OI Change for easier selection
+    summary = df_live.groupby('Name')['OI_Change'].max().reset_index().sort_values('OI_Change', ascending=False)
+    summary['Label'] = summary['Name'] + " (" + summary['OI_Change'].astype(str) + "%)"
+    
+    col_sel, col_blank = st.columns([1, 2])
+    with col_sel:
+        selected_label = st.selectbox("Select Stock to Analyze:", summary['Label'].tolist())
+    
+    if not selected_label: return
+    
+    selected_stock = summary.loc[summary['Label'] == selected_label, 'Name'].iloc[0]
+
+    # 2. Fetch History (Time Series)
+    history_df = get_stock_time_series(selected_date, selected_stock)
+    
+    if history_df.empty:
+        st.error(f"Could not load detailed history for {selected_stock}.")
+        st.caption("This might happen if the backend history snapshot (HISTORY#BOOST#...) is missing.")
+        return
+
+    # 3. CONSTRUCT THE "STAIRCASE" CHART
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # Trace 1: Open Interest (The Stairs)
+    fig.add_trace(
+        go.Scatter(
+            x=history_df['Time'], 
+            y=history_df['OI_Change'], 
+            mode='lines', 
+            name='OI Structure',
+            line=dict(shape='hv', color='#00FF7F', width=3), # <--- THIS CREATES THE STAIRS
+            fill='tozeroy',
+            fillcolor='rgba(0, 255, 127, 0.15)'
+        ),
+        secondary_y=False
+    )
+
+    # Trace 2: Price Action (The Yellow Line)
+    fig.add_trace(
+        go.Scatter(
+            x=history_df['Time'], 
+            y=history_df['SignalPrice'], 
+            name='Price Action',
+            line=dict(color='#FBBF24', width=2),
+            mode='lines+markers'
+        ),
+        secondary_y=True
+    )
+
+    # Layout Styling
+    fig.update_layout(
+        title=f"<b>{selected_stock}</b>: Price vs. OI Structure",
+        template="plotly_dark",
+        paper_bgcolor="#0e1117",
+        plot_bgcolor="#0e1117",
+        hovermode="x unified",
+        height=500,
+        legend=dict(orientation="h", y=1.02, x=1, xanchor="right", yanchor="bottom")
+    )
+    
+    # Axes Styling
+    fig.update_yaxes(title_text="OI Change %", color="#00FF7F", secondary_y=False, showgrid=False)
+    fig.update_yaxes(title_text="Price", color="#FBBF24", secondary_y=True, showgrid=True, gridcolor="#222")
+    fig.update_xaxes(title_text="Time (Intraday)", showgrid=False)
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # 4. MOMENTUM BAR (Step Size)
+    history_df['Step_Size'] = history_df['OI_Change'].diff().fillna(0)
+    
+    fig2 = go.Figure()
+    fig2.add_trace(go.Bar(
+        x=history_df['Time'],
+        y=history_df['Step_Size'],
+        marker_color=history_df['Step_Size'].apply(lambda x: '#22c55e' if x>=0 else '#ef4444'),
+        name="Step Intensity"
+    ))
+    fig2.update_layout(
+        title="Momentum Intensity (Size of Each Step)",
+        template="plotly_dark",
+        height=300,
+        paper_bgcolor="#0e1117",
+        plot_bgcolor="#0e1117"
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+# =========================================================
 # MAIN NAVIGATION
 # =========================================================
 with st.sidebar:
@@ -602,7 +759,7 @@ with st.sidebar:
 """, unsafe_allow_html=True)
     
     st.divider()
-    page = st.radio("Navigate", ["🚀 Live Radar", "📈 Market Velocity", "📊 Sector Heatmap"])
+    page = st.radio("Navigate", ["🚀 Live Radar", "📈 Market Velocity", "📊 Sector Heatmap", "🔬 Deep Dive"])
     st.divider()
     india_tz = pytz.timezone('Asia/Kolkata')
     selected_date = st.date_input("📅 Select Date", datetime.now(india_tz).date())
@@ -617,3 +774,5 @@ elif page == "📈 Market Velocity":
     render_intraday_boost(selected_date)
 elif page == "📊 Sector Heatmap":
     render_sector_view()
+elif page == "🔬 Deep Dive":
+    render_deep_dive_view(selected_date)
