@@ -4,3 +4,4 @@ boto3
 streamlit-autorefresh
 streamlit-option-menu
 yfinance
+plotly
