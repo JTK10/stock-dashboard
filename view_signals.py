@@ -7,6 +7,7 @@ import json
 from decimal import Decimal
 from datetime import datetime, timedelta
 import pytz
+# import yfinance as yf  <-- REMOVED TO SPEED UP SITE
 from streamlit_autorefresh import st_autorefresh
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -25,7 +26,6 @@ NSE_OI_TABLE = "NSE_OI_DATA"
 DEFAULT_EXCHANGE = "NSE"
 
 # === OBFUSCATION MAPPING (THE "MASK") ===
-# (Kept for compatibility, though we use direct values now)
 SIGNAL_MASK = {
     "LONG_BUILDUP": "ACCUMULATION",
     "SHORT_BUILDUP": "DISTRIBUTION",
@@ -37,7 +37,6 @@ SIGNAL_MASK = {
 
 # === TRADINGVIEW MAPPING ===
 TICKER_CORRECTIONS = {
-    # ... (Your existing TICKER_CORRECTIONS dictionary - Keeping it as is) ...
     "LIC HOUSING FINANCE LTD": "LICHSGFIN", "INOX WIND LIMITED": "INOXWIND",
     "HINDUSTAN ZINC LIMITED": "HINDZINC", "HINDUSTAN UNILEVER LTD.": "HINDUNILVR",
     "TATA TECHNOLOGIES LIMITED": "TATATECH", "SYNGENE INTERNATIONAL LTD": "SYNGENE",
@@ -190,13 +189,129 @@ def convert_decimal(obj):
     return obj
 
 @st.cache_data(ttl=60)
+def load_todays_history_optimized(target_date):
+    """
+    OPTIMIZED LOAD: Uses Query on HISTORY partition to get full day events in one go.
+    Much faster than Scanning INTRADAY_BOOST row by row.
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
+        table = dynamodb.Table(DYNAMODB_TABLE)
+        pk = f"HISTORY#BOOST#{target_date.isoformat()}"
+        
+        response = table.query(KeyConditionExpression=Key('PK').eq(pk))
+        items = response.get('Items', [])
+        
+        while 'LastEvaluatedKey' in response:
+            response = table.query(
+                KeyConditionExpression=Key('PK').eq(pk),
+                ExclusiveStartKey=response['LastEvaluatedKey']
+            )
+            items.extend(response.get('Items', []))
+        return items
+    except Exception as e:
+        st.error(f"Error fetching history: {e}")
+        return []
+
+def process_radar_data(history_items):
+    """
+    Processes raw history blobs to calculate:
+    - First Entry Time
+    - Max Move %
+    - Current Metrics
+    """
+    if not history_items: return pd.DataFrame()
+    
+    # 1. Flatten all snapshots
+    all_snapshots = []
+    for record in history_items:
+        time_str = record.get('SK')
+        try:
+            raw_data = record.get('Data')
+            if isinstance(raw_data, str):
+                if raw_data.startswith('"'): raw_data = raw_data[1:-1].replace('""', '"')
+                data = json.loads(raw_data)
+                if isinstance(data, str): data = json.loads(data)
+                
+                if isinstance(data, list):
+                    for stock in data:
+                        stock['SnapshotTime'] = time_str
+                        # Ensure numeric
+                        stock['SignalPrice'] = float(stock.get('SignalPrice', 0))
+                        stock['OI_Change'] = float(stock.get('OI_Change', 0))
+                        # Backwards compatibility for Score
+                        if 'Score' not in stock:
+                            score = abs(stock['OI_Change'])
+                            if "BROKE" in str(stock.get('BreakType', '')): score += 10
+                            stock['Score'] = score
+                        else:
+                            stock['Score'] = float(stock['Score'])
+                        all_snapshots.append(stock)
+        except: continue
+            
+    df_full = pd.DataFrame(all_snapshots)
+    if df_full.empty: return pd.DataFrame()
+    
+    # 2. Group by Stock to find Entry & Moves
+    stats = []
+    for stock_name, group in df_full.groupby('Name'):
+        group = group.sort_values('SnapshotTime')
+        latest = group.iloc[-1]
+        
+        # We only care about stocks that have a High Score or Staircase at some point
+        # OR are currently in the list
+        
+        # Find "First Entry" (When Score > 20)
+        valid_entries = group[group['Score'] > 20]
+        
+        if not valid_entries.empty:
+            first_entry = valid_entries.iloc[0]
+            entry_price = float(first_entry['SignalPrice'])
+            entry_time = first_entry['SnapshotTime']
+            
+            # Calculate Moves from Entry
+            post_entry_data = group[group['SnapshotTime'] >= entry_time]
+            
+            # Determine Direction based on latest side or breakdown
+            is_bullish = "Bullish" in str(latest.get('Side', '')) or latest['OI_Change'] > 0 # Simple proxy
+            
+            if is_bullish:
+                max_price = post_entry_data['SignalPrice'].max()
+                max_move_pct = ((max_price - entry_price) / entry_price) * 100
+                curr_move_pct = ((latest['SignalPrice'] - entry_price) / entry_price) * 100
+            else:
+                min_price = post_entry_data['SignalPrice'].min()
+                max_move_pct = ((entry_price - min_price) / entry_price) * 100
+                curr_move_pct = ((entry_price - latest['SignalPrice']) / entry_price) * 100
+        else:
+            # Never qualified as "High Confidence", but still present
+            entry_time = "-"
+            entry_price = 0
+            max_move_pct = 0
+            curr_move_pct = 0
+
+        stats.append({
+            'Name': stock_name,
+            'Latest Score': latest.get('Score', 0),
+            'Staircase': latest.get('Staircase', '❓'), # Will populate when backend updates
+            'Break': latest.get('BreakType', 'INSIDE'),
+            'Entry Time': entry_time,
+            'Entry Price': entry_price,
+            'Current Price': latest['SignalPrice'],
+            'Max Move %': max_move_pct,
+            'Current Move %': curr_move_pct,
+            'OI %': latest['OI_Change']
+        })
+        
+    return pd.DataFrame(stats).sort_values('Latest Score', ascending=False)
+
+@st.cache_data(ttl=60)
 def load_data_from_dynamodb(target_date, signal_type=None):
+    # KEPT FOR BACKWARD COMPATIBILITY WITH OTHER PAGES
     try:
         dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
         table = dynamodb.Table(DYNAMODB_TABLE)
         target_date_str = target_date.isoformat()
-        
-        # Scan for INTRADAY_BOOST signals for the selected date
         response = table.scan(FilterExpression=Attr("Date").eq(target_date_str))
         items = response.get('Items', [])
         while 'LastEvaluatedKey' in response:
@@ -210,78 +325,16 @@ def load_data_from_dynamodb(target_date, signal_type=None):
         return pd.DataFrame()
 
     if not items: return pd.DataFrame()
-
     df = pd.DataFrame([convert_decimal(item) for item in items])
-
-    # Filter by Signal Type if provided
-    if signal_type:
-        if 'Signal' in df.columns:
-            df = df[df['Signal'] == signal_type].copy()
-
-    # Standardize Column Names
-    if 'Price' in df.columns and 'SignalPrice' not in df.columns:
-        df.rename(columns={'Price': 'SignalPrice'}, inplace=True)
+    if signal_type and 'Signal' in df.columns:
+        df = df[df['Signal'] == signal_type].copy()
     
-    # Ensure Score exists (for backward compatibility if old data is mixed)
-    if 'Score' not in df.columns: df['Score'] = 0.0
-    if 'Staircase' not in df.columns: df['Staircase'] = 'N/A'
-    if 'OI_Change' not in df.columns: df['OI_Change'] = 0.0
-    if 'BreakType' not in df.columns: df['BreakType'] = 'INSIDE'
-
-    # Numeric Conversion
-    df['Score'] = pd.to_numeric(df['Score'], errors='coerce').fillna(0)
-    df['SignalPrice'] = pd.to_numeric(df['SignalPrice'], errors='coerce')
-    df['OI_Change'] = pd.to_numeric(df['OI_Change'], errors='coerce').fillna(0)
-
+    # Basic clean up
+    numeric_cols = ['SignalPrice', 'OI_Change', 'NetMovePct']
+    for col in numeric_cols:
+        if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        
     return df
-
-@st.cache_data(ttl=60)
-def load_history_data(target_date):
-    """Fetches full timeline history for Deep Dive"""
-    try:
-        dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
-        table = dynamodb.Table(DYNAMODB_TABLE)
-        pk = f"HISTORY#BOOST#{target_date.isoformat()}"
-        response = table.query(KeyConditionExpression=Key('PK').eq(pk))
-        items = response.get('Items', [])
-        while 'LastEvaluatedKey' in response:
-            response = table.query(
-                KeyConditionExpression=Key('PK').eq(pk),
-                ExclusiveStartKey=response['LastEvaluatedKey']
-            )
-            items.extend(response.get('Items', []))
-        return items
-    except Exception as e:
-        st.error(f"Error fetching history: {e}")
-        return []
-
-def get_stock_time_series(target_date, stock_name):
-    items = load_history_data(target_date)
-    data_points = []
-    
-    for item in items:
-        time_str = item.get('SK')
-        try:
-            raw_data = item.get('Data')
-            if isinstance(raw_data, str):
-                snapshot = json.loads(raw_data)
-                if isinstance(snapshot, str): snapshot = json.loads(snapshot)
-                
-                if isinstance(snapshot, list):
-                    for stock in snapshot:
-                        if stock.get('Name') == stock_name:
-                            data_points.append({
-                                'Time': time_str,
-                                'OI_Change': float(stock.get('OI_Change', 0)),
-                                'SignalPrice': float(stock.get('SignalPrice', 0)),
-                                'NetMovePct': float(stock.get('NetMovePct', 0))
-                            })
-        except:
-            continue
-    
-    if not data_points: return pd.DataFrame()
-    df = pd.DataFrame(data_points)
-    return df.sort_values('Time')
 
 @st.cache_data(ttl=60)
 def load_nse_sector_data():
@@ -289,11 +342,8 @@ def load_nse_sector_data():
         dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
         table = dynamodb.Table(NSE_OI_TABLE) 
         response = table.get_item(Key={"PK": "NSE#OI", "SK": "LATEST"})
-        
         if "Item" in response and "data" in response["Item"]:
-            json_str = response["Item"]["data"]
-            data = json.loads(json_str)
-            return pd.DataFrame(data)
+            return pd.DataFrame(json.loads(response["Item"]["data"]))
     except Exception as e:
         st.error(f"Error loading NSE Data: {e}")
     return pd.DataFrame()
@@ -309,357 +359,180 @@ def metric_card(title, value, subtitle=None, color="#e5e7eb", glow=False):
     """
 
 # =========================================================
-# PAGE 1: SMART MONEY RADAR (Top 15 Sorted by Score)
+# PAGE 1: LIVE RADAR (UPDATED WITH STAIRCASE LIST)
 # =========================================================
 def render_live_alerts(selected_date):
     # CSS & AUTO REFRESH
-    count = st_autorefresh(interval=60 * 1000, key="datarefresh") # Refresh every 60s
+    st_autorefresh(interval=60 * 1000, key="datarefresh")
     st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
         .stApp { background-color: #080a0e; font-family: 'Inter', sans-serif; }
         [data-testid="stVerticalBlockBorderWrapper"] > div { background-color: #131722; border-radius: 12px; border: 1px solid #2a2e3a; box-shadow: 0 0 18px rgba(0,0,0,.35); }
-        tbody tr:hover { background-color: rgba(255,255,255,0.04) !important; }
         .table-header { color: #FFFFFF; background: linear-gradient(90deg, rgba(255,255,255,0.05) 0%, rgba(0,0,0,0) 100%); border-left: 4px solid #00FF7F; padding: 10px 15px; margin-bottom: 15px; font-size: 1.2rem; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; border-radius: 4px; }
-        .block-container { padding-top: 2rem; padding-bottom: 3rem; }
-        [data-testid="stSidebar"] { background-color: #0b0e14; border-right: 1px solid #2a2e3a; }
     </style>
     """, unsafe_allow_html=True)
 
-    st.subheader("🚀 Smart Money Radar")
-    st.caption("Top Opportunities sorted by Structure + Momentum + Low Risk Entry")
+    st.subheader("🚀 Smart Money Radar (Staircase List)")
     
-    # --- LOAD DATA ---
-    df = load_data_from_dynamodb(selected_date, "INTRADAY_BOOST")
+    # 1. Load HISTORY data (Fast Query)
+    history_items = load_todays_history_optimized(selected_date)
     
-    if df.empty:
-        st.info(f"No signals found for {selected_date}")
+    if not history_items:
+        st.info(f"No history data found for {selected_date}. Waiting for market data...")
         return
 
-    # --- GET LATEST SNAPSHOT ---
-    if 'Time' in df.columns:
-        latest_time = df['Time'].max()
-        latest_df = df[df['Time'] == latest_time].copy()
-    else:
-        latest_df = df.copy() # Fallback if no Time column
-
-    if latest_df.empty:
-        st.warning("Data loaded but no recent snapshot found.")
+    # 2. Process into Radar Stats
+    radar_df = process_radar_data(history_items)
+    
+    if radar_df.empty:
+        st.warning("Data processed but no stocks found.")
         return
 
-    # --- SORT BY SCORE ---
-    # Convert Score to numeric just in case
-    latest_df['Score'] = pd.to_numeric(latest_df['Score'], errors='coerce').fillna(0)
+    # 3. Filter and Sort (Top 20 by Score)
+    display_df = radar_df.head(20).copy()
     
-    # Filter: Show top 15 based on Score
-    ranked_df = latest_df.sort_values(by='Score', ascending=False).head(15)
+    # 4. Add Chart Links
+    display_df['Cleaned_Name'] = display_df['Name'].replace(TICKER_CORRECTIONS)
+    display_df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + display_df['Cleaned_Name'].str.replace('&', '_').str.replace(' ', '')
+    display_df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + display_df['TV_Symbol']
 
-    # --- METRICS ---
-    # Calculate some summary stats from the Top 15
-    top_score_stock = ranked_df.iloc[0]['Name'] if not ranked_df.empty else "N/A"
-    avg_score = ranked_df['Score'].mean() if not ranked_df.empty else 0
-    staircase_count = len(ranked_df[ranked_df['Staircase'].astype(str).str.contains("✅")])
+    # 5. Metrics
+    top_stock = display_df.iloc[0]['Name'] if not display_df.empty else "-"
+    max_mover = display_df.sort_values('Max Move %', ascending=False).iloc[0] if not display_df.empty else None
+    max_move_val = f"{max_mover['Max Move %']:.2f}% ({max_mover['Name']})" if max_mover is not None else "-"
     
-    c1, c2, c3 = st.columns(3) 
-    c1.markdown(metric_card("Last Updated", latest_time, "Market Time", "#eab308", glow=True), unsafe_allow_html=True)
-    c2.markdown(metric_card("Top Pick", top_score_stock, "Highest Conviction", "#60a5fa"), unsafe_allow_html=True)
-    c3.markdown(metric_card("Strong Structures", f"{staircase_count}/15", "Staircase Confirmed", "#00FF7F"), unsafe_allow_html=True)
-
+    c1, c2 = st.columns(2)
+    c1.markdown(metric_card("Top Structure", top_stock, "Highest Score", "#00FF7F", glow=True), unsafe_allow_html=True)
+    c2.markdown(metric_card("Biggest Mover", max_move_val, "Since Entry", "#60a5fa"), unsafe_allow_html=True)
+    
     st.divider()
 
-    # --- PREPARE TABLE DATA ---
-    # Add chart links
-    if 'Name' in ranked_df.columns:
-        ranked_df['Cleaned_Name'] = ranked_df['Name'].replace(TICKER_CORRECTIONS)
-        ranked_df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + ranked_df['Cleaned_Name'].str.replace('&', '_').str.replace(' ', '')
-        ranked_df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + ranked_df['TV_Symbol']
-
-    # --- DISPLAY TABLE ---
-    with st.container(border=True):
-        st.markdown(f'<div class="table-header">🏆 Top 15 Opportunities ({latest_time})</div>', unsafe_allow_html=True)
-        
-        st.data_editor(
-            ranked_df[['Chart', 'Name', 'Score', 'Staircase', 'BreakType', 'OI_Change', 'SignalPrice']], 
-            column_config={
-                "Chart": st.column_config.LinkColumn("View", display_text="📊", width="small"),
-                "Name": st.column_config.TextColumn("Stock", width="medium"),
-                "Score": st.column_config.ProgressColumn("Smart Score", min_value=0, max_value=50, format="%.1f"),
-                "Staircase": st.column_config.TextColumn("Structure", width="small"),
-                "BreakType": st.column_config.TextColumn("Level Break", width="small"),
-                "OI_Change": st.column_config.NumberColumn("OI Change %", format="%.2f%%"),
-                "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f")
-            },
-            hide_index=True, use_container_width=True, disabled=True, key="radar_table"
-        )
+    # 6. Display List View
+    st.markdown('<div class="table-header">🏆 Staircase Opportunities</div>', unsafe_allow_html=True)
+    
+    st.data_editor(
+        display_df[[
+            'Chart', 'Name', 'Latest Score', 'Staircase', 'Break', 
+            'Entry Time', 'Entry Price', 'Current Price', 'Max Move %', 'Current Move %', 'OI %'
+        ]],
+        column_config={
+            "Chart": st.column_config.LinkColumn("View", display_text="📊", width="small"),
+            "Name": st.column_config.TextColumn("Stock", width="medium"),
+            "Latest Score": st.column_config.ProgressColumn("Smart Score", min_value=0, max_value=60, format="%.1f"),
+            "Staircase": st.column_config.TextColumn("Struct", width="small"),
+            "Break": st.column_config.TextColumn("Lvl Break", width="small"),
+            "Entry Time": st.column_config.TextColumn("1st Signal", width="small"),
+            "Entry Price": st.column_config.NumberColumn("Entry ₹", format="%.1f"),
+            "Current Price": st.column_config.NumberColumn("CMP ₹", format="%.1f"),
+            "Max Move %": st.column_config.NumberColumn("Max Run", format="%.2f%%"),
+            "Current Move %": st.column_config.NumberColumn("Run Now", format="%.2f%%"),
+            "OI %": st.column_config.NumberColumn("OI Chg", format="%.1f%%")
+        },
+        hide_index=True,
+        use_container_width=True,
+        height=800
+    )
 
 # =========================================================
-# PAGE 2: VELOCITY LEADERBOARD (Kept for broad view)
+# PAGE 2: MARKET VELOCITY (Original Code, Reduced)
 # =========================================================
 def render_intraday_boost(selected_date):
-    st.header("📈 Market Velocity (Broad View)")
-    st.info("Broader list of market movers (Gainers/Losers).")
-
-    df = load_data_from_dynamodb(selected_date, "INTRADAY_BOOST")
+    st.header("📈 Market Velocity")
+    df = load_data_from_dynamodb(selected_date, "INTRADAY_BOOST") # Uses Scan (Legacy)
     if df.empty:
         st.warning("No data found.")
         return
-
-    # Filter for latest time to show current state
-    if 'Time' in df.columns:
-        latest_time = df['Time'].max()
-        df = df[df['Time'] == latest_time].copy()
-
-    # Prepare Data
+        
+    # Just show simple list
     if 'Name' in df.columns:
-        df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
-        df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df['Cleaned_Name'].str.replace(' ', '')
+        df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df['Name'].replace(TICKER_CORRECTIONS).str.replace(' ', '')
         df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + df['TV_Symbol']
-
-    # Classification
-    def classify_side(row):
-        # Use new 'Side' column if available, else derive
-        if 'Side' in row and pd.notnull(row['Side']): return str(row['Side']).upper()
-        # Fallback
-        r_type = str(row.get('RankType', '')).upper()
-        if 'TOP GAINER' in r_type: return 'BULLISH'
-        if 'TOP LOSER' in r_type: return 'BEARISH'
-        return 'NEUTRAL'
-
-    df['View_Side'] = df.apply(classify_side, axis=1)
+        
+    # Sort by OI
+    df = df.sort_values('OI_Change', ascending=False).head(20)
     
-    df_bull = df[df['View_Side'] == 'BULLISH'].sort_values('OI_Change', ascending=False).head(20)
-    df_bear = df[df['View_Side'] == 'BEARISH'].sort_values('OI_Change', ascending=False).head(20)
-
-    col1, col2 = st.columns(2)
-
-    display_cols = ['Chart', 'Name', 'SignalPrice', 'BreakType', 'OI_Change']
-
-    with col1:
-        st.markdown("#### 🟢 Bullish Momentum")
-        st.data_editor(
-            df_bull[display_cols],
-            column_config={
-                "Chart": st.column_config.LinkColumn("View", display_text="📈", width="small"),
-                "Name": st.column_config.TextColumn("Name", width="medium"),
-                "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
-                "BreakType": st.column_config.TextColumn("Status"),
-                "OI_Change": st.column_config.NumberColumn("OI %", format="%.2f")
-            },
-            use_container_width=True, hide_index=True, disabled=True
-        )
-
-    with col2:
-        st.markdown("#### 🔴 Bearish Momentum")
-        st.data_editor(
-            df_bear[display_cols],
-            column_config={
-                "Chart": st.column_config.LinkColumn("View", display_text="📉", width="small"),
-                "Name": st.column_config.TextColumn("Name", width="medium"),
-                "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
-                "BreakType": st.column_config.TextColumn("Status"),
-                "OI_Change": st.column_config.NumberColumn("OI %", format="%.2f")
-            },
-            use_container_width=True, hide_index=True, disabled=True
-        )
+    st.data_editor(
+        df[['Chart', 'Name', 'SignalPrice', 'OI_Change', 'BreakType']],
+        column_config={
+            "Chart": st.column_config.LinkColumn("View", display_text="📈", width="small"),
+            "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
+            "OI_Change": st.column_config.NumberColumn("OI %", format="%.2f")
+        },
+        hide_index=True, use_container_width=True
+    )
 
 # =========================================================
-# PAGE 3: SECTOR VIEW
+# PAGE 3: SECTOR VIEW (Original Code)
 # =========================================================
 def render_sector_view():
     st.header("📊 Sector Heatmap")
-    
     df = load_nse_sector_data()
-    if df.empty:
-        st.warning("No Data found.")
-        return
+    if df.empty: return
 
     df['Sector'] = df['symbol'].map(SECTOR_MAP).fillna('Others')
-    cols_to_fix = ['pChangeInOpenInterest', 'lastPrice', 'changeinOpenInterest']
-    for col in cols_to_fix:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    cols = ['pChangeInOpenInterest', 'lastPrice']
+    for c in cols: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
 
-    sector_stats = df.groupby('Sector')['pChangeInOpenInterest'].mean().reset_index()
-    sector_stats = sector_stats.sort_values('pChangeInOpenInterest', ascending=False)
+    stats = df.groupby('Sector')['pChangeInOpenInterest'].mean().reset_index().sort_values('pChangeInOpenInterest', ascending=False)
+    st.bar_chart(stats.set_index('Sector')['pChangeInOpenInterest'])
     
-    sector_counts = df['Sector'].value_counts().reset_index()
-    sector_counts.columns = ['Sector', 'Stock_Count']
-    
-    final_sector = pd.merge(sector_stats, sector_counts, on='Sector')
-    final_sector = final_sector[final_sector['Sector'] != 'Others']
-
-    st.subheader("🔥 Sector Activity")
-    st.bar_chart(final_sector.set_index('Sector')['pChangeInOpenInterest'])
-
-    col1, col2 = st.columns([1, 2])
-    
-    with col1:
-        st.markdown("### 🏆 Leading Sectors")
-        st.dataframe(
-            final_sector.style.format({"pChangeInOpenInterest": "{:.2f}"}),
-            column_order=("Sector", "pChangeInOpenInterest", "Stock_Count"),
-            column_config={
-                "pChangeInOpenInterest": "Activity Score"
-            },
-            hide_index=True,
-            use_container_width=True
-        )
-
-    with col2:
-        st.markdown("### 🔍 Drilldown")
-        selected_sector = st.selectbox("Select Sector", final_sector['Sector'].unique())
-        
-        subset = df[df['Sector'] == selected_sector].copy()
-        subset = subset.sort_values('pChangeInOpenInterest', ascending=False)
-        
-        st.dataframe(
-            subset[['symbol', 'pChangeInOpenInterest', 'openInterest', 'lastPrice']],
-            column_config={
-                "symbol": "Stock",
-                "pChangeInOpenInterest": st.column_config.NumberColumn("Activity", format="%.2f"),
-                "openInterest": st.column_config.NumberColumn("Volume Depth", format="%d"),
-                "lastPrice": st.column_config.NumberColumn("Price", format="%.2f"),
-            },
-            hide_index=True,
-            use_container_width=True
-        )
+    st.dataframe(stats, hide_index=True, use_container_width=True)
 
 # =========================================================
-# PAGE 4: DEEP DIVE (STRUCTURAL ANALYSIS)
+# PAGE 4: DEEP DIVE (Original Code)
 # =========================================================
 def render_deep_dive_view(selected_date):
-    st.header("🔬 Deep Dive: Structural Analysis")
-    st.info("Visualizing the 'Staircase' accumulation patterns and Price vs. OI correlation.")
+    st.header("🔬 Deep Dive")
+    # Use optimized load here too for speed
+    history_items = load_todays_history_optimized(selected_date)
+    if not history_items: return
     
-    # 1. Get List of Stocks Active Today (from Live Data)
-    df_live = load_data_from_dynamodb(selected_date, "INTRADAY_BOOST")
-    if df_live.empty:
-        st.info("No data available for this date.")
-        return
+    # Extract unique names
+    names = set()
+    for item in history_items:
+        try:
+            data = json.loads(item.get('Data', '[]'))
+            if isinstance(data, str): data = json.loads(data)
+            for s in data: names.add(s.get('Name'))
+        except: pass
         
-    if 'Name' not in df_live.columns: return
+    selected = st.selectbox("Select Stock", sorted(list(names)))
     
-    # Create a list of stocks labeled with their OI Change for easier selection
-    summary = df_live.groupby('Name')['OI_Change'].max().reset_index().sort_values('OI_Change', ascending=False)
-    summary['Label'] = summary['Name'] + " (" + summary['OI_Change'].astype(str) + "%)"
-    
-    col_sel, col_blank = st.columns([1, 2])
-    with col_sel:
-        selected_label = st.selectbox("Select Stock to Analyze:", summary['Label'].tolist())
-    
-    if not selected_label: return
-    
-    selected_stock = summary.loc[summary['Label'] == selected_label, 'Name'].iloc[0]
-
-    # 2. Fetch History (Time Series)
-    history_df = get_stock_time_series(selected_date, selected_stock)
-    
-    if history_df.empty:
-        st.error(f"Could not load detailed history for {selected_stock}.")
-        st.caption("This might happen if the backend history snapshot (HISTORY#BOOST#...) is missing.")
-        return
-
-    # 3. CONSTRUCT THE "STAIRCASE" CHART
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-
-    # Trace 1: Open Interest (The Stairs)
-    fig.add_trace(
-        go.Scatter(
-            x=history_df['Time'], 
-            y=history_df['OI_Change'], 
-            mode='lines', 
-            name='OI Structure',
-            line=dict(shape='hv', color='#00FF7F', width=3), # <--- THIS CREATES THE STAIRS
-            fill='tozeroy',
-            fillcolor='rgba(0, 255, 127, 0.15)'
-        ),
-        secondary_y=False
-    )
-
-    # Trace 2: Price Action (The Yellow Line)
-    fig.add_trace(
-        go.Scatter(
-            x=history_df['Time'], 
-            y=history_df['SignalPrice'], 
-            name='Price Action',
-            line=dict(color='#FBBF24', width=2),
-            mode='lines+markers'
-        ),
-        secondary_y=True
-    )
-
-    # Layout Styling
-    fig.update_layout(
-        title=f"<b>{selected_stock}</b>: Price vs. OI Structure",
-        template="plotly_dark",
-        paper_bgcolor="#0e1117",
-        plot_bgcolor="#0e1117",
-        hovermode="x unified",
-        height=500,
-        legend=dict(orientation="h", y=1.02, x=1, xanchor="right", yanchor="bottom")
-    )
-    
-    # Axes Styling
-    fig.update_yaxes(title_text="OI Change %", color="#00FF7F", secondary_y=False, showgrid=False)
-    fig.update_yaxes(title_text="Price", color="#FBBF24", secondary_y=True, showgrid=True, gridcolor="#222")
-    fig.update_xaxes(title_text="Time (Intraday)", showgrid=False)
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # 4. MOMENTUM BAR (Step Size)
-    history_df['Step_Size'] = history_df['OI_Change'].diff().fillna(0)
-    
-    fig2 = go.Figure()
-    fig2.add_trace(go.Bar(
-        x=history_df['Time'],
-        y=history_df['Step_Size'],
-        marker_color=history_df['Step_Size'].apply(lambda x: '#22c55e' if x>=0 else '#ef4444'),
-        name="Step Intensity"
-    ))
-    fig2.update_layout(
-        title="Momentum Intensity (Size of Each Step)",
-        template="plotly_dark",
-        height=300,
-        paper_bgcolor="#0e1117",
-        plot_bgcolor="#0e1117"
-    )
-    st.plotly_chart(fig2, use_container_width=True)
+    if selected:
+        # Build TS
+        ts_data = []
+        for item in history_items:
+            time = item.get('SK')
+            try:
+                data = json.loads(item.get('Data', '[]'))
+                if isinstance(data, str): data = json.loads(data)
+                for s in data:
+                    if s.get('Name') == selected:
+                        ts_data.append({
+                            'Time': time, 
+                            'OI': float(s.get('OI_Change',0)), 
+                            'Price': float(s.get('SignalPrice',0))
+                        })
+            except: pass
+            
+        if ts_data:
+            df = pd.DataFrame(ts_data).sort_values('Time')
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            fig.add_trace(go.Scatter(x=df['Time'], y=df['OI'], mode='lines', name='OI', line=dict(shape='hv', color='#00FF7F')), secondary_y=False)
+            fig.add_trace(go.Scatter(x=df['Time'], y=df['Price'], name='Price', line=dict(color='#FBBF24')), secondary_y=True)
+            fig.update_layout(title=f"{selected} Structure", template="plotly_dark", height=500)
+            st.plotly_chart(fig, use_container_width=True)
 
 # =========================================================
-# MAIN NAVIGATION
+# MAIN
 # =========================================================
 with st.sidebar:
-    st.markdown("""
-<div style="text-align: left; margin-bottom: 25px; padding-left: 10px;">
-<svg width="250" height="60" viewBox="0 0 400 70" fill="none" xmlns="http://www.w3.org/2000/svg">
-<defs>
-<linearGradient id="bullGradient" x1="0%" y1="100%" x2="100%" y2="0%">
-<stop offset="0%" style="stop-color:#00F260;stop-opacity:1" />
-<stop offset="100%" style="stop-color:#0575E6;stop-opacity:1" />
-</linearGradient>
-<filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-<feGaussianBlur stdDeviation="2" result="coloredBlur"/>
-<feMerge>
-<feMergeNode in="coloredBlur"/>
-<feMergeNode in="SourceGraphic"/>
-</feMerge>
-</filter>
-</defs>
-<text x="10" y="52" fill="url(#bullGradient)" font-family="'Inter', sans-serif" font-weight="700" font-size="42" letter-spacing="-1">QUANT</text>
-<text x="170" y="52" fill="#FFFFFF" font-family="'Inter', sans-serif" font-weight="700" font-size="42" letter-spacing="-1">RADAR</text>
-</svg>
-</div>
-""", unsafe_allow_html=True)
-    
-    st.divider()
+    st.title("QUANT RADAR")
     page = st.radio("Navigate", ["🚀 Live Radar", "📈 Market Velocity", "📊 Sector Heatmap", "🔬 Deep Dive"])
-    st.divider()
     india_tz = pytz.timezone('Asia/Kolkata')
     selected_date = st.date_input("📅 Select Date", datetime.now(india_tz).date())
-    
-    if st.button("🔄 Clear Cache (Fix Blanks)"):
-        st.cache_data.clear()
-        st.rerun()
+    if st.button("🔄 Refresh"): st.cache_data.clear(); st.rerun()
 
 if page == "🚀 Live Radar":
     render_live_alerts(selected_date)
