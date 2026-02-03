@@ -138,6 +138,39 @@ TICKER_CORRECTIONS = {
     "FSN E COMMERCE VENTURES LIMITED": "NYKAA", "FSN E-COMMERCE VENTURES LTD": "NYKAA"
 }
 
+# --- SECTOR MAPPING ---
+SECTOR_MAP = {
+    "HDFCBANK": "Banking", "ICICIBANK": "Banking", "SBIN": "Banking", "AXISBANK": "Banking",
+    "KOTAKBANK": "Banking", "INDUSINDBK": "Banking", "BANKBARODA": "Banking", "PNB": "Banking",
+    "AUBANK": "Banking", "BANDHANBNK": "Banking", "FEDERALBNK": "Banking", "IDFCFIRSTB": "Banking",
+    "RBLBANK": "Banking", "BAJFINANCE": "Finance", "BAJAJFINSV": "Finance", "CHOLAFIN": "Finance",
+    "SHRIRAMFIN": "Finance", "MUTHOOTFIN": "Finance", "SBICARD": "Finance", "PEL": "Finance",
+    "MANAPPURAM": "Finance", "L&TFH": "Finance", "M&MFIN": "Finance", "PFC": "Finance", "RECLTD": "Finance",
+    "TCS": "IT", "INFY": "IT", "HCLTECH": "IT", "WIPRO": "IT", "TECHM": "IT", "LTIM": "IT",
+    "LTTS": "IT", "PERSISTENT": "IT", "COFORGE": "IT", "MPHASIS": "IT", "TATAELXSI": "IT",
+    "OFSS": "IT", "KPITTECH": "IT",
+    "MARUTI": "Auto", "TATAMOTORS": "Auto", "M&M": "Auto", "BAJAJ-AUTO": "Auto", "EICHERMOT": "Auto",
+    "HEROMOTOCO": "Auto", "TVSMOTOR": "Auto", "ASHOKLEY": "Auto", "BHARATFORG": "Auto",
+    "BALKRISIND": "Auto", "MRF": "Auto", "APOLLOTYRE": "Auto", "MOTHERSON": "Auto", "BOSCHLTD": "Auto",
+    "RELIANCE": "Oil & Gas", "ONGC": "Oil & Gas", "BPCL": "Oil & Gas", "IOC": "Oil & Gas", "HPCL": "Oil & Gas",
+    "GAIL": "Oil & Gas", "PETRONET": "Oil & Gas", "NTPC": "Power", "POWERGRID": "Power", "TATAPOWER": "Power",
+    "ADANIGREEN": "Power", "ADANIENSOL": "Power", "JSWENERGY": "Power", "NHPC": "Power",
+    "ITC": "FMCG", "HINDUNILVR": "FMCG", "NESTLEIND": "FMCG", "BRITANNIA": "FMCG", "TATACONSUM": "FMCG",
+    "DABUR": "FMCG", "GODREJCP": "FMCG", "MARICO": "FMCG", "COLPAL": "FMCG", "VBL": "FMCG",
+    "ASIANPAINT": "Consumer", "BERGEPAINT": "Consumer", "PIDILITIND": "Consumer", "TITAN": "Consumer",
+    "HAVELLS": "Consumer", "VOLTAS": "Consumer", "WHIRLPOOL": "Consumer", "PAGEIND": "Consumer", "TRENT": "Consumer",
+    "SUNPHARMA": "Pharma", "CIPLA": "Pharma", "DRREDDY": "Pharma", "DIVISLAB": "Pharma", "TORNTPHARM": "Pharma",
+    "LUPIN": "Pharma", "AUROPHARMA": "Pharma", "ALKEM": "Pharma", "BIOCON": "Pharma", "SYNGENE": "Pharma",
+    "GLENMARK": "Pharma", "GRANULES": "Pharma", "LAURUSLABS": "Pharma", "APOLLOHOSP": "Healthcare", 
+    "METROPOLIS": "Healthcare", "LALPATHLAB": "Healthcare",
+    "TATASTEEL": "Metals", "JSWSTEEL": "Metals", "HINDALCO": "Metals", "VEDL": "Metals", "JINDALSTEL": "Metals",
+    "SAIL": "Metals", "NMDC": "Metals", "NATIONALUM": "Metals", "COALINDIA": "Metals", "HINDZINC": "Metals",
+    "DLF": "Realty", "GODREJPROP": "Realty", "OBEROIRLTY": "Realty", "PHOENIXLTD": "Realty", "PRESTIGE": "Realty",
+    "LODHA": "Realty", "LT": "Infra", "HAL": "Defence", "BEL": "Defence", "MAZDOCK": "Defence", "COCHINSHIP": "Defence",
+    "BDL": "Defence", "IRCTC": "Railways", "CONCOR": "Logistics", "INDIGO": "Aviation",
+    "ADANIENT": "Diversified", "ADANIPORTS": "Infra"
+}
+
 # --- HELPER FUNCTIONS ---
 def convert_decimal(obj):
     if isinstance(obj, list): return [convert_decimal(i) for i in obj]
@@ -194,9 +227,6 @@ def calculate_staircase_locally(history_ois):
     # Spike Filter (Relaxed for simplicity in UI check, or strict)
     # Using strict rules:
     if max(steps) > 5.0 and len(steps) > 0:
-        # Check if it was a Breakout (passed in separate arg usually)
-        # For UI fail-safe, we might skip the Breakout Exception or assume True if huge OI
-        # Let's keep it safe:
         return False
         
     if min(steps) < -0.5: return False
@@ -256,21 +286,17 @@ def process_radar_data(history_items):
         if is_break: score += 10
         if "PWH" in break_type or "PWL" in break_type: score += 10
         
-        # 3. Entry Logic
-        valid_entries = group[group['Score'] > 20] # Use original or new score? 
-        # Let's use our new Score for filtering
-        
-        # Temporary DF with new scores
-        group['NewScore'] = group['OI_Change'].abs() + group['BreakType'].apply(lambda x: 10 if "BROKE" in str(x) else 0)
-        # Adding Staircase bonus retroactively is hard for every row without loop, 
-        # but we can use the 'latest' status as a proxy for "Trend Validity"
-        
+        # 3. Entry Logic - Use the Recalculated Score for filtering
         if score > 20:
             # It's valid NOW. Find when it started being interesting.
-            # Simple approximation: First time OI > 3% and Break happened
-            entries = group[(group['OI_Change'].abs() > 3.0) & (group['BreakType'].str.contains("BROKE", na=False))]
-            if not entries.empty:
-                first_entry = entries.iloc[0]
+            # Look for the first row where calculated criteria were met
+            # Since calculating row-by-row is slow, we use a vectorized approximation
+            # Assume entry when OI > 3 and Break occurred
+            
+            potential_entries = group[(group['OI_Change'].abs() > 3.0) & (group['BreakType'].astype(str).str.contains("BROKE", na=False))]
+            
+            if not potential_entries.empty:
+                first_entry = potential_entries.iloc[0]
                 entry_price = float(first_entry['SignalPrice'])
                 entry_time = first_entry['SnapshotTime']
                 
@@ -412,7 +438,10 @@ def render_live_alerts(selected_date):
             "Name": st.column_config.TextColumn("Stock", width="medium"),
             "Latest Score": st.column_config.ProgressColumn("Smart Score", min_value=0, max_value=60, format="%.1f"),
             "Staircase": st.column_config.TextColumn("Struct", width="small"),
+            "Break": st.column_config.TextColumn("Lvl Break", width="small"),
             "Entry Time": st.column_config.TextColumn("Signal", width="small"),
+            "Entry Price": st.column_config.NumberColumn("Entry ₹", format="%.1f"),
+            "Current Price": st.column_config.NumberColumn("CMP ₹", format="%.1f"),
             "Max Move %": st.column_config.NumberColumn("Max Run", format="%.2f%%"),
             "Current Move %": st.column_config.NumberColumn("Run Now", format="%.2f%%"),
             "OI %": st.column_config.NumberColumn("OI", format="%.1f%%")
