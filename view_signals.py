@@ -5,11 +5,12 @@ from boto3.dynamodb.conditions import Key, Attr
 import os
 import json
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from streamlit_autorefresh import st_autorefresh
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import numpy as np
 import gc 
 
 # --- 0. MEMORY CLEANUP ---
@@ -137,39 +138,6 @@ TICKER_CORRECTIONS = {
     "FSN E COMMERCE VENTURES LIMITED": "NYKAA", "FSN E-COMMERCE VENTURES LTD": "NYKAA"
 }
 
-# --- SECTOR MAPPING ---
-SECTOR_MAP = {
-    "HDFCBANK": "Banking", "ICICIBANK": "Banking", "SBIN": "Banking", "AXISBANK": "Banking",
-    "KOTAKBANK": "Banking", "INDUSINDBK": "Banking", "BANKBARODA": "Banking", "PNB": "Banking",
-    "AUBANK": "Banking", "BANDHANBNK": "Banking", "FEDERALBNK": "Banking", "IDFCFIRSTB": "Banking",
-    "RBLBANK": "Banking", "BAJFINANCE": "Finance", "BAJAJFINSV": "Finance", "CHOLAFIN": "Finance",
-    "SHRIRAMFIN": "Finance", "MUTHOOTFIN": "Finance", "SBICARD": "Finance", "PEL": "Finance",
-    "MANAPPURAM": "Finance", "L&TFH": "Finance", "M&MFIN": "Finance", "PFC": "Finance", "RECLTD": "Finance",
-    "TCS": "IT", "INFY": "IT", "HCLTECH": "IT", "WIPRO": "IT", "TECHM": "IT", "LTIM": "IT",
-    "LTTS": "IT", "PERSISTENT": "IT", "COFORGE": "IT", "MPHASIS": "IT", "TATAELXSI": "IT",
-    "OFSS": "IT", "KPITTECH": "IT",
-    "MARUTI": "Auto", "TATAMOTORS": "Auto", "M&M": "Auto", "BAJAJ-AUTO": "Auto", "EICHERMOT": "Auto",
-    "HEROMOTOCO": "Auto", "TVSMOTOR": "Auto", "ASHOKLEY": "Auto", "BHARATFORG": "Auto",
-    "BALKRISIND": "Auto", "MRF": "Auto", "APOLLOTYRE": "Auto", "MOTHERSON": "Auto", "BOSCHLTD": "Auto",
-    "RELIANCE": "Oil & Gas", "ONGC": "Oil & Gas", "BPCL": "Oil & Gas", "IOC": "Oil & Gas", "HPCL": "Oil & Gas",
-    "GAIL": "Oil & Gas", "PETRONET": "Oil & Gas", "NTPC": "Power", "POWERGRID": "Power", "TATAPOWER": "Power",
-    "ADANIGREEN": "Power", "ADANIENSOL": "Power", "JSWENERGY": "Power", "NHPC": "Power",
-    "ITC": "FMCG", "HINDUNILVR": "FMCG", "NESTLEIND": "FMCG", "BRITANNIA": "FMCG", "TATACONSUM": "FMCG",
-    "DABUR": "FMCG", "GODREJCP": "FMCG", "MARICO": "FMCG", "COLPAL": "FMCG", "VBL": "FMCG",
-    "ASIANPAINT": "Consumer", "BERGEPAINT": "Consumer", "PIDILITIND": "Consumer", "TITAN": "Consumer",
-    "HAVELLS": "Consumer", "VOLTAS": "Consumer", "WHIRLPOOL": "Consumer", "PAGEIND": "Consumer", "TRENT": "Consumer",
-    "SUNPHARMA": "Pharma", "CIPLA": "Pharma", "DRREDDY": "Pharma", "DIVISLAB": "Pharma", "TORNTPHARM": "Pharma",
-    "LUPIN": "Pharma", "AUROPHARMA": "Pharma", "ALKEM": "Pharma", "BIOCON": "Pharma", "SYNGENE": "Pharma",
-    "GLENMARK": "Pharma", "GRANULES": "Pharma", "LAURUSLABS": "Pharma", "APOLLOHOSP": "Healthcare", 
-    "METROPOLIS": "Healthcare", "LALPATHLAB": "Healthcare",
-    "TATASTEEL": "Metals", "JSWSTEEL": "Metals", "HINDALCO": "Metals", "VEDL": "Metals", "JINDALSTEL": "Metals",
-    "SAIL": "Metals", "NMDC": "Metals", "NATIONALUM": "Metals", "COALINDIA": "Metals", "HINDZINC": "Metals",
-    "DLF": "Realty", "GODREJPROP": "Realty", "OBEROIRLTY": "Realty", "PHOENIXLTD": "Realty", "PRESTIGE": "Realty",
-    "LODHA": "Realty", "LT": "Infra", "HAL": "Defence", "BEL": "Defence", "MAZDOCK": "Defence", "COCHINSHIP": "Defence",
-    "BDL": "Defence", "IRCTC": "Railways", "CONCOR": "Logistics", "INDIGO": "Aviation",
-    "ADANIENT": "Diversified", "ADANIPORTS": "Infra"
-}
-
 # --- HELPER FUNCTIONS ---
 def convert_decimal(obj):
     if isinstance(obj, list): return [convert_decimal(i) for i in obj]
@@ -177,10 +145,11 @@ def convert_decimal(obj):
     elif isinstance(obj, Decimal): return float(obj)
     return obj
 
+# --- 1. OPTIMIZED DATA LOADING ---
 @st.cache_data(ttl=60)
 def load_todays_history_optimized(target_date):
     """
-    OPTIMIZED LOAD: Uses Query on HISTORY partition to get full day events in one go.
+    Fetches the entire day's history in one go via Query (Fast).
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
@@ -201,12 +170,44 @@ def load_todays_history_optimized(target_date):
         st.error(f"Error fetching history: {e}")
         return []
 
+def calculate_staircase_locally(history_ois):
+    """
+    FAIL-SAFE: Logic to check Staircase if backend returned '?'
+    """
+    if len(history_ois) < 2: return False
+    
+    # Growth Check (> 2%)
+    if (history_ois[-1] - history_ois[0]) < 2.0: return False
+    
+    # Glitch Fix & Steps
+    cleaned = []
+    last_val = 0
+    for v in history_ois:
+        if v == 0 and abs(last_val) > 1.0: cleaned.append(last_val)
+        else: 
+            cleaned.append(v)
+            last_val = v
+            
+    steps = np.diff(cleaned)
+    if len(steps) == 0: return False
+    
+    # Spike Filter (Relaxed for simplicity in UI check, or strict)
+    # Using strict rules:
+    if max(steps) > 5.0 and len(steps) > 0:
+        # Check if it was a Breakout (passed in separate arg usually)
+        # For UI fail-safe, we might skip the Breakout Exception or assume True if huge OI
+        # Let's keep it safe:
+        return False
+        
+    if min(steps) < -0.5: return False
+    
+    # Consistency
+    good_steps = [s for s in steps if s > 0.2]
+    return len(good_steps) >= 2
+
 def process_radar_data(history_items):
     """
-    Processes raw history blobs to calculate:
-    - First Entry Time
-    - Max Move %
-    - Current Metrics
+    Processes raw history blobs to calculate Metrics & Force-Check Scores.
     """
     if not history_items: return pd.DataFrame()
     
@@ -224,70 +225,82 @@ def process_radar_data(history_items):
                 if isinstance(data, list):
                     for stock in data:
                         stock['SnapshotTime'] = time_str
-                        # Ensure numeric
                         stock['SignalPrice'] = float(stock.get('SignalPrice', 0))
                         stock['OI_Change'] = float(stock.get('OI_Change', 0))
-                        # Backwards compatibility for Score
-                        if 'Score' not in stock:
-                            score = abs(stock['OI_Change'])
-                            if "BROKE" in str(stock.get('BreakType', '')): score += 10
-                            stock['Score'] = score
-                        else:
-                            stock['Score'] = float(stock['Score'])
                         all_snapshots.append(stock)
         except: continue
             
     df_full = pd.DataFrame(all_snapshots)
     if df_full.empty: return pd.DataFrame()
     
-    # 2. Group by Stock to find Entry & Moves
+    # 2. Group by Stock
     stats = []
     for stock_name, group in df_full.groupby('Name'):
         group = group.sort_values('SnapshotTime')
         latest = group.iloc[-1]
         
-        # We only care about stocks that have a High Score or Staircase at some point
-        # OR are currently in the list
+        # --- RE-CALCULATE SCORE & STAIRCASE (FAIL-SAFE) ---
+        # Get history of OI for this stock
+        history_ois = group['OI_Change'].tolist()
         
-        # Find "First Entry" (When Score > 20)
-        valid_entries = group[group['Score'] > 20]
+        # Check Staircase Locally
+        is_staircase = calculate_staircase_locally(history_ois)
         
-        if not valid_entries.empty:
-            first_entry = valid_entries.iloc[0]
-            entry_price = float(first_entry['SignalPrice'])
-            entry_time = first_entry['SnapshotTime']
-            
-            # Calculate Moves from Entry
-            post_entry_data = group[group['SnapshotTime'] >= entry_time]
-            
-            # Determine Direction based on latest side or breakdown
-            is_bullish = "Bullish" in str(latest.get('Side', '')) or latest['OI_Change'] > 0 # Simple proxy
-            
-            if is_bullish:
-                max_price = post_entry_data['SignalPrice'].max()
-                max_move_pct = ((max_price - entry_price) / entry_price) * 100
-                curr_move_pct = ((latest['SignalPrice'] - entry_price) / entry_price) * 100
+        # Check Break
+        break_type = str(latest.get('BreakType', 'INSIDE')).upper()
+        is_break = ("PDH" in break_type) or ("PDL" in break_type)
+        
+        # Recalculate Score
+        score = abs(latest['OI_Change'])
+        if is_staircase: score += 15
+        if is_break: score += 10
+        if "PWH" in break_type or "PWL" in break_type: score += 10
+        
+        # 3. Entry Logic
+        valid_entries = group[group['Score'] > 20] # Use original or new score? 
+        # Let's use our new Score for filtering
+        
+        # Temporary DF with new scores
+        group['NewScore'] = group['OI_Change'].abs() + group['BreakType'].apply(lambda x: 10 if "BROKE" in str(x) else 0)
+        # Adding Staircase bonus retroactively is hard for every row without loop, 
+        # but we can use the 'latest' status as a proxy for "Trend Validity"
+        
+        if score > 20:
+            # It's valid NOW. Find when it started being interesting.
+            # Simple approximation: First time OI > 3% and Break happened
+            entries = group[(group['OI_Change'].abs() > 3.0) & (group['BreakType'].str.contains("BROKE", na=False))]
+            if not entries.empty:
+                first_entry = entries.iloc[0]
+                entry_price = float(first_entry['SignalPrice'])
+                entry_time = first_entry['SnapshotTime']
+                
+                # Calculate Moves
+                is_bullish = latest['OI_Change'] > 0
+                post_entry = group[group['SnapshotTime'] >= entry_time]
+                
+                if is_bullish:
+                    max_price = post_entry['SignalPrice'].max()
+                    max_move = ((max_price - entry_price) / entry_price) * 100
+                    curr_move = ((latest['SignalPrice'] - entry_price) / entry_price) * 100
+                else:
+                    min_price = post_entry['SignalPrice'].min()
+                    max_move = ((entry_price - min_price) / entry_price) * 100
+                    curr_move = ((entry_price - latest['SignalPrice']) / entry_price) * 100
             else:
-                min_price = post_entry_data['SignalPrice'].min()
-                max_move_pct = ((entry_price - min_price) / entry_price) * 100
-                curr_move_pct = ((entry_price - latest['SignalPrice']) / entry_price) * 100
+                entry_time, entry_price, max_move, curr_move = "-", 0, 0, 0
         else:
-            # Never qualified as "High Confidence", but still present
-            entry_time = "-"
-            entry_price = 0
-            max_move_pct = 0
-            curr_move_pct = 0
+             entry_time, entry_price, max_move, curr_move = "-", 0, 0, 0
 
         stats.append({
             'Name': stock_name,
-            'Latest Score': latest.get('Score', 0),
-            'Staircase': latest.get('Staircase', '❓'), # Will populate when backend updates
+            'Latest Score': round(score, 1), # Use the Calculated Score
+            'Staircase': "✅" if is_staircase else "❌",
             'Break': latest.get('BreakType', 'INSIDE'),
             'Entry Time': entry_time,
             'Entry Price': entry_price,
             'Current Price': latest['SignalPrice'],
-            'Max Move %': max_move_pct,
-            'Current Move %': curr_move_pct,
+            'Max Move %': max_move,
+            'Current Move %': curr_move,
             'OI %': latest['OI_Change']
         })
         
@@ -295,7 +308,7 @@ def process_radar_data(history_items):
 
 @st.cache_data(ttl=60)
 def load_data_from_dynamodb(target_date, signal_type=None):
-    # KEPT FOR BACKWARD COMPATIBILITY WITH OTHER PAGES
+    # LEGACY: For other tabs
     try:
         dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
         table = dynamodb.Table(DYNAMODB_TABLE)
@@ -308,20 +321,16 @@ def load_data_from_dynamodb(target_date, signal_type=None):
                 ExclusiveStartKey=response['LastEvaluatedKey']
             )
             items.extend(response.get('Items', []))
-    except Exception as e:
-        st.error(f"Error querying DynamoDB: {e}")
-        return pd.DataFrame()
+    except: return pd.DataFrame()
 
     if not items: return pd.DataFrame()
     df = pd.DataFrame([convert_decimal(item) for item in items])
     if signal_type and 'Signal' in df.columns:
         df = df[df['Signal'] == signal_type].copy()
     
-    # Basic clean up
-    numeric_cols = ['SignalPrice', 'OI_Change', 'NetMovePct']
-    for col in numeric_cols:
-        if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-        
+    numeric = ['SignalPrice', 'OI_Change']
+    for c in numeric: 
+        if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
     return df
 
 @st.cache_data(ttl=60)
@@ -330,10 +339,9 @@ def load_nse_sector_data():
         dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
         table = dynamodb.Table(NSE_OI_TABLE) 
         response = table.get_item(Key={"PK": "NSE#OI", "SK": "LATEST"})
-        if "Item" in response and "data" in response["Item"]:
+        if "Item" in response:
             return pd.DataFrame(json.loads(response["Item"]["data"]))
-    except Exception as e:
-        st.error(f"Error loading NSE Data: {e}")
+    except: pass
     return pd.DataFrame()
 
 def metric_card(title, value, subtitle=None, color="#e5e7eb", glow=False):
@@ -347,10 +355,9 @@ def metric_card(title, value, subtitle=None, color="#e5e7eb", glow=False):
     """
 
 # =========================================================
-# PAGE 1: LIVE RADAR (UPDATED WITH STAIRCASE LIST)
+# PAGE 1: SMART RADAR
 # =========================================================
 def render_live_alerts(selected_date):
-    # CSS & AUTO REFRESH
     st_autorefresh(interval=60 * 1000, key="datarefresh")
     st.markdown("""
     <style>
@@ -361,55 +368,39 @@ def render_live_alerts(selected_date):
     </style>
     """, unsafe_allow_html=True)
 
-    st.subheader("🚀 Smart Money Radar (Staircase List)")
+    st.subheader("🚀 Smart Money Radar")
     
-    # 1. Load HISTORY data (Fast Query)
+    # 1. Load History
     history_items = load_todays_history_optimized(selected_date)
     
     if not history_items:
-        st.info(f"No history data found for {selected_date}. Waiting for market data...")
+        st.info("No data found for this date.")
         return
 
-    # 2. Process into Radar Stats
+    # 2. Process
     radar_df = process_radar_data(history_items)
-    
     if radar_df.empty:
-        st.warning("Data processed but no stocks found.")
+        st.warning("No valid stocks found.")
         return
 
-    # 3. Filter and Sort (Top 20 by Score)
+    # 3. Filter Top 20
     display_df = radar_df.head(20).copy()
     
-    # 4. Add Chart Links
+    # 4. Links
     display_df['Cleaned_Name'] = display_df['Name'].replace(TICKER_CORRECTIONS)
     display_df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + display_df['Cleaned_Name'].str.replace('&', '_').str.replace(' ', '')
     display_df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + display_df['TV_Symbol']
 
     # 5. Metrics
-    # Safe checks for metrics
+    latest_time_val = max([x.get('SK', '00:00') for x in history_items]) if history_items else "N/A"
     top_stock = display_df.iloc[0]['Name'] if not display_df.empty else "-"
     
-    max_mover_val = "-"
-    if not display_df.empty:
-        max_mover = display_df.sort_values('Max Move %', ascending=False).iloc[0]
-        max_mover_val = f"{max_mover['Max Move %']:.2f}% ({max_mover['Name']})"
-    
-    # Safely get latest time from history items
-    latest_time_val = "N/A"
-    if history_items:
-        # Assuming sorted by query, but let's be safe
-        times = [x.get('SK', '00:00') for x in history_items]
-        if times: latest_time_val = max(times)
-
     c1, c2, c3 = st.columns(3)
-    c1.markdown(metric_card("Last Updated", latest_time_val, "Market Time", "#eab308", glow=True), unsafe_allow_html=True)
-    c2.markdown(metric_card("Top Structure", top_stock, "Highest Score", "#00FF7F"), unsafe_allow_html=True)
-    c3.markdown(metric_card("Biggest Mover", max_mover_val, "Since Entry", "#60a5fa"), unsafe_allow_html=True)
+    c1.markdown(metric_card("Last Update", latest_time_val, "Time", "#eab308", glow=True), unsafe_allow_html=True)
+    c2.markdown(metric_card("Top Pick", top_stock, "Highest Score", "#00FF7F"), unsafe_allow_html=True)
     
     st.divider()
-
-    # 6. Display List View
-    st.markdown('<div class="table-header">🏆 Staircase Opportunities</div>', unsafe_allow_html=True)
+    st.markdown('<div class="table-header">🏆 Top Opportunities</div>', unsafe_allow_html=True)
     
     st.data_editor(
         display_df[[
@@ -421,13 +412,10 @@ def render_live_alerts(selected_date):
             "Name": st.column_config.TextColumn("Stock", width="medium"),
             "Latest Score": st.column_config.ProgressColumn("Smart Score", min_value=0, max_value=60, format="%.1f"),
             "Staircase": st.column_config.TextColumn("Struct", width="small"),
-            "Break": st.column_config.TextColumn("Lvl Break", width="small"),
-            "Entry Time": st.column_config.TextColumn("1st Signal", width="small"),
-            "Entry Price": st.column_config.NumberColumn("Entry ₹", format="%.1f"),
-            "Current Price": st.column_config.NumberColumn("CMP ₹", format="%.1f"),
+            "Entry Time": st.column_config.TextColumn("Signal", width="small"),
             "Max Move %": st.column_config.NumberColumn("Max Run", format="%.2f%%"),
             "Current Move %": st.column_config.NumberColumn("Run Now", format="%.2f%%"),
-            "OI %": st.column_config.NumberColumn("OI Chg", format="%.1f%%")
+            "OI %": st.column_config.NumberColumn("OI", format="%.1f%%")
         },
         hide_index=True,
         use_container_width=True,
@@ -435,21 +423,17 @@ def render_live_alerts(selected_date):
     )
 
 # =========================================================
-# PAGE 2: MARKET VELOCITY (Original Code, Reduced)
+# PAGE 2: MARKET VELOCITY
 # =========================================================
 def render_intraday_boost(selected_date):
     st.header("📈 Market Velocity")
-    df = load_data_from_dynamodb(selected_date, "INTRADAY_BOOST") # Uses Scan (Legacy)
-    if df.empty:
-        st.warning("No data found.")
-        return
-        
-    # Just show simple list
+    df = load_data_from_dynamodb(selected_date, "INTRADAY_BOOST")
+    if df.empty: return
+    
     if 'Name' in df.columns:
         df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df['Name'].replace(TICKER_CORRECTIONS).str.replace(' ', '')
         df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + df['TV_Symbol']
         
-    # Sort by OI
     df = df.sort_values('OI_Change', ascending=False).head(20)
     
     st.data_editor(
@@ -463,7 +447,7 @@ def render_intraday_boost(selected_date):
     )
 
 # =========================================================
-# PAGE 3: SECTOR VIEW (Original Code)
+# PAGE 3: SECTOR VIEW
 # =========================================================
 def render_sector_view():
     st.header("📊 Sector Heatmap")
@@ -472,23 +456,21 @@ def render_sector_view():
 
     df['Sector'] = df['symbol'].map(SECTOR_MAP).fillna('Others')
     cols = ['pChangeInOpenInterest', 'lastPrice']
-    for c in cols: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+    for c in cols: 
+        if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
 
     stats = df.groupby('Sector')['pChangeInOpenInterest'].mean().reset_index().sort_values('pChangeInOpenInterest', ascending=False)
     st.bar_chart(stats.set_index('Sector')['pChangeInOpenInterest'])
-    
     st.dataframe(stats, hide_index=True, use_container_width=True)
 
 # =========================================================
-# PAGE 4: DEEP DIVE (Original Code)
+# PAGE 4: DEEP DIVE
 # =========================================================
 def render_deep_dive_view(selected_date):
     st.header("🔬 Deep Dive")
-    # Use optimized load here too for speed
     history_items = load_todays_history_optimized(selected_date)
     if not history_items: return
     
-    # Extract unique names
     names = set()
     for item in history_items:
         try:
@@ -500,7 +482,6 @@ def render_deep_dive_view(selected_date):
     selected = st.selectbox("Select Stock", sorted(list(names)))
     
     if selected:
-        # Build TS
         ts_data = []
         for item in history_items:
             time = item.get('SK')
@@ -529,12 +510,12 @@ def render_deep_dive_view(selected_date):
 # =========================================================
 with st.sidebar:
     st.title("QUANT RADAR")
-    page = st.radio("Navigate", ["🚀 Live Radar", "📈 Market Velocity", "📊 Sector Heatmap", "🔬 Deep Dive"])
+    page = st.radio("Navigate", ["🚀 Smart Radar", "📈 Market Velocity", "📊 Sector Heatmap", "🔬 Deep Dive"])
     india_tz = pytz.timezone('Asia/Kolkata')
     selected_date = st.date_input("📅 Select Date", datetime.now(india_tz).date())
     if st.button("🔄 Refresh"): st.cache_data.clear(); st.rerun()
 
-if page == "🚀 Live Radar":
+if page == "🚀 Smart Radar":
     render_live_alerts(selected_date)
 elif page == "📈 Market Velocity":
     render_intraday_boost(selected_date)
