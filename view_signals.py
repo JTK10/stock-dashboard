@@ -5,7 +5,7 @@ from boto3.dynamodb.conditions import Key, Attr
 import os
 import json
 from decimal import Decimal
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 from streamlit_autorefresh import st_autorefresh
 import plotly.graph_objects as go
@@ -203,16 +203,17 @@ def load_todays_history_optimized(target_date):
         st.error(f"Error fetching history: {e}")
         return []
 
-def calculate_staircase_locally(history_ois):
+def calculate_staircase_locally(history_ois, break_type):
     """
     FAIL-SAFE: Logic to check Staircase if backend returned '?'
+    Allows Spikes if 'BreakType' indicates a breakout.
     """
     if len(history_ois) < 2: return False
     
     # Growth Check (> 2%)
     if (history_ois[-1] - history_ois[0]) < 2.0: return False
     
-    # Glitch Fix & Steps
+    # Glitch Fix
     cleaned = []
     last_val = 0
     for v in history_ois:
@@ -224,11 +225,13 @@ def calculate_staircase_locally(history_ois):
     steps = np.diff(cleaned)
     if len(steps) == 0: return False
     
-    # Spike Filter (Relaxed for simplicity in UI check, or strict)
-    # Using strict rules:
-    if max(steps) > 5.0 and len(steps) > 0:
-        return False
-        
+    # Spike Filter Logic
+    is_break = ("PDH" in str(break_type)) or ("PDL" in str(break_type))
+    
+    # If Breaking: Allow huge steps. If Inside: Restrict steps.
+    spike_limit = 50.0 if is_break else 5.0
+    
+    if max(steps) > spike_limit: return False
     if min(steps) < -0.5: return False
     
     # Consistency
@@ -268,16 +271,11 @@ def process_radar_data(history_items):
     for stock_name, group in df_full.groupby('Name'):
         group = group.sort_values('SnapshotTime')
         latest = group.iloc[-1]
+        break_type = str(latest.get('BreakType', 'INSIDE')).upper()
         
         # --- RE-CALCULATE SCORE & STAIRCASE (FAIL-SAFE) ---
-        # Get history of OI for this stock
         history_ois = group['OI_Change'].tolist()
-        
-        # Check Staircase Locally
-        is_staircase = calculate_staircase_locally(history_ois)
-        
-        # Check Break
-        break_type = str(latest.get('BreakType', 'INSIDE')).upper()
+        is_staircase = calculate_staircase_locally(history_ois, break_type)
         is_break = ("PDH" in break_type) or ("PDL" in break_type)
         
         # Recalculate Score
@@ -286,14 +284,9 @@ def process_radar_data(history_items):
         if is_break: score += 10
         if "PWH" in break_type or "PWL" in break_type: score += 10
         
-        # 3. Entry Logic - Use the Recalculated Score for filtering
+        # 3. Entry Logic (LOWERED THRESHOLD TO 1.5% TO CATCH EARLY)
         if score > 20:
-            # It's valid NOW. Find when it started being interesting.
-            # Look for the first row where calculated criteria were met
-            # Since calculating row-by-row is slow, we use a vectorized approximation
-            # Assume entry when OI > 3 and Break occurred
-            
-            potential_entries = group[(group['OI_Change'].abs() > 3.0) & (group['BreakType'].astype(str).str.contains("BROKE", na=False))]
+            potential_entries = group[(group['OI_Change'].abs() > 1.5) & (group['BreakType'].astype(str).str.contains("BROKE", na=False))]
             
             if not potential_entries.empty:
                 first_entry = potential_entries.iloc[0]
@@ -319,7 +312,7 @@ def process_radar_data(history_items):
 
         stats.append({
             'Name': stock_name,
-            'Latest Score': round(score, 1), # Use the Calculated Score
+            'Latest Score': round(score, 1),
             'Staircase': "✅" if is_staircase else "❌",
             'Break': latest.get('BreakType', 'INSIDE'),
             'Entry Time': entry_time,
@@ -334,7 +327,6 @@ def process_radar_data(history_items):
 
 @st.cache_data(ttl=60)
 def load_data_from_dynamodb(target_date, signal_type=None):
-    # LEGACY: For other tabs
     try:
         dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
         table = dynamodb.Table(DYNAMODB_TABLE)
@@ -439,7 +431,7 @@ def render_live_alerts(selected_date):
             "Latest Score": st.column_config.ProgressColumn("Smart Score", min_value=0, max_value=60, format="%.1f"),
             "Staircase": st.column_config.TextColumn("Struct", width="small"),
             "Break": st.column_config.TextColumn("Lvl Break", width="small"),
-            "Entry Time": st.column_config.TextColumn("Signal", width="small"),
+            "Entry Time": st.column_config.TextColumn("1st Signal", width="small"),
             "Entry Price": st.column_config.NumberColumn("Entry ₹", format="%.1f"),
             "Current Price": st.column_config.NumberColumn("CMP ₹", format="%.1f"),
             "Max Move %": st.column_config.NumberColumn("Max Run", format="%.2f%%"),
@@ -452,28 +444,74 @@ def render_live_alerts(selected_date):
     )
 
 # =========================================================
-# PAGE 2: MARKET VELOCITY
+# PAGE 2: MARKET VELOCITY (RESTORED)
 # =========================================================
 def render_intraday_boost(selected_date):
     st.header("📈 Market Velocity")
+    st.info("Real-time momentum (Original View).")
+
     df = load_data_from_dynamodb(selected_date, "INTRADAY_BOOST")
-    if df.empty: return
-    
+    if df.empty:
+        st.warning("No data found.")
+        return
+
+    # Filter for latest time
+    if 'Time' in df.columns:
+        latest_time = df['Time'].max()
+        df = df[df['Time'] == latest_time].copy()
+
+    # Prepare Data
     if 'Name' in df.columns:
-        df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df['Name'].replace(TICKER_CORRECTIONS).str.replace(' ', '')
+        df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
+        df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df['Cleaned_Name'].str.replace(' ', '')
         df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + df['TV_Symbol']
-        
-    df = df.sort_values('OI_Change', ascending=False).head(20)
+
+    # Classification
+    def classify_side(row):
+        # Use new 'Side' column if available, else derive
+        if 'Side' in row and pd.notnull(row['Side']): return str(row['Side']).upper()
+        # Fallback
+        r_type = str(row.get('RankType', '')).upper()
+        if 'TOP GAINER' in r_type: return 'BULLISH'
+        if 'TOP LOSER' in r_type: return 'BEARISH'
+        return 'NEUTRAL'
+
+    df['View_Side'] = df.apply(classify_side, axis=1)
     
-    st.data_editor(
-        df[['Chart', 'Name', 'SignalPrice', 'OI_Change', 'BreakType']],
-        column_config={
-            "Chart": st.column_config.LinkColumn("View", display_text="📈", width="small"),
-            "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
-            "OI_Change": st.column_config.NumberColumn("OI %", format="%.2f")
-        },
-        hide_index=True, use_container_width=True
-    )
+    df_bull = df[df['View_Side'] == 'BULLISH'].sort_values('OI_Change', ascending=False).head(20)
+    df_bear = df[df['View_Side'] == 'BEARISH'].sort_values('OI_Change', ascending=False).head(20)
+
+    col1, col2 = st.columns(2)
+
+    display_cols = ['Chart', 'Name', 'SignalPrice', 'BreakType', 'OI_Change']
+
+    with col1:
+        st.markdown("#### 🟢 Bullish Momentum")
+        st.data_editor(
+            df_bull[display_cols],
+            column_config={
+                "Chart": st.column_config.LinkColumn("View", display_text="📈", width="small"),
+                "Name": st.column_config.TextColumn("Name", width="medium"),
+                "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
+                "BreakType": st.column_config.TextColumn("Status"),
+                "OI_Change": st.column_config.NumberColumn("OI %", format="%.2f")
+            },
+            use_container_width=True, hide_index=True, disabled=True
+        )
+
+    with col2:
+        st.markdown("#### 🔴 Bearish Momentum")
+        st.data_editor(
+            df_bear[display_cols],
+            column_config={
+                "Chart": st.column_config.LinkColumn("View", display_text="📉", width="small"),
+                "Name": st.column_config.TextColumn("Name", width="medium"),
+                "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
+                "BreakType": st.column_config.TextColumn("Status"),
+                "OI_Change": st.column_config.NumberColumn("OI %", format="%.2f")
+            },
+            use_container_width=True, hide_index=True, disabled=True
+        )
 
 # =========================================================
 # PAGE 3: SECTOR VIEW
