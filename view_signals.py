@@ -1,13 +1,12 @@
 import streamlit as st
 import pandas as pd
 import boto3
-from boto3.dynamodb.conditions import Attr, Key
+from boto3.dynamodb.conditions import Key, Attr
 import os
 import json
 from decimal import Decimal
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
-# import yfinance as yf  <-- REMOVED TO SPEED UP SITE
 from streamlit_autorefresh import st_autorefresh
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -24,16 +23,6 @@ AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
 DYNAMODB_TABLE = os.getenv("DYNAMODB_TABLE", "SentAlerts")
 NSE_OI_TABLE = "NSE_OI_DATA" 
 DEFAULT_EXCHANGE = "NSE"
-
-# === OBFUSCATION MAPPING (THE "MASK") ===
-SIGNAL_MASK = {
-    "LONG_BUILDUP": "ACCUMULATION",
-    "SHORT_BUILDUP": "DISTRIBUTION",
-    "SHORT_COVERING": "RECOVERY",
-    "LONG_UNWINDING": "LIQUIDATION",
-    "NEUTRAL": "STABLE",
-    "N/A": "-"
-}
 
 # === TRADINGVIEW MAPPING ===
 TICKER_CORRECTIONS = {
@@ -148,7 +137,7 @@ TICKER_CORRECTIONS = {
     "FSN E COMMERCE VENTURES LIMITED": "NYKAA", "FSN E-COMMERCE VENTURES LTD": "NYKAA"
 }
 
-# --- SECTOR MAPPING FOR NSE DATA ---
+# --- SECTOR MAPPING ---
 SECTOR_MAP = {
     "HDFCBANK": "Banking", "ICICIBANK": "Banking", "SBIN": "Banking", "AXISBANK": "Banking",
     "KOTAKBANK": "Banking", "INDUSINDBK": "Banking", "BANKBARODA": "Banking", "PNB": "Banking",
@@ -192,7 +181,6 @@ def convert_decimal(obj):
 def load_todays_history_optimized(target_date):
     """
     OPTIMIZED LOAD: Uses Query on HISTORY partition to get full day events in one go.
-    Much faster than Scanning INTRADAY_BOOST row by row.
     """
     try:
         dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
@@ -398,13 +386,25 @@ def render_live_alerts(selected_date):
     display_df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + display_df['TV_Symbol']
 
     # 5. Metrics
+    # Safe checks for metrics
     top_stock = display_df.iloc[0]['Name'] if not display_df.empty else "-"
-    max_mover = display_df.sort_values('Max Move %', ascending=False).iloc[0] if not display_df.empty else None
-    max_move_val = f"{max_mover['Max Move %']:.2f}% ({max_mover['Name']})" if max_mover is not None else "-"
     
-    c1, c2 = st.columns(2)
-    c1.markdown(metric_card("Top Structure", top_stock, "Highest Score", "#00FF7F", glow=True), unsafe_allow_html=True)
-    c2.markdown(metric_card("Biggest Mover", max_move_val, "Since Entry", "#60a5fa"), unsafe_allow_html=True)
+    max_mover_val = "-"
+    if not display_df.empty:
+        max_mover = display_df.sort_values('Max Move %', ascending=False).iloc[0]
+        max_mover_val = f"{max_mover['Max Move %']:.2f}% ({max_mover['Name']})"
+    
+    # Safely get latest time from history items
+    latest_time_val = "N/A"
+    if history_items:
+        # Assuming sorted by query, but let's be safe
+        times = [x.get('SK', '00:00') for x in history_items]
+        if times: latest_time_val = max(times)
+
+    c1, c2, c3 = st.columns(3)
+    c1.markdown(metric_card("Last Updated", latest_time_val, "Market Time", "#eab308", glow=True), unsafe_allow_html=True)
+    c2.markdown(metric_card("Top Structure", top_stock, "Highest Score", "#00FF7F"), unsafe_allow_html=True)
+    c3.markdown(metric_card("Biggest Mover", max_mover_val, "Since Entry", "#60a5fa"), unsafe_allow_html=True)
     
     st.divider()
 
