@@ -7,7 +7,6 @@ import json
 from decimal import Decimal
 from datetime import datetime, timedelta
 import pytz
-import yfinance as yf
 from streamlit_autorefresh import st_autorefresh
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -26,6 +25,7 @@ NSE_OI_TABLE = "NSE_OI_DATA"
 DEFAULT_EXCHANGE = "NSE"
 
 # === OBFUSCATION MAPPING (THE "MASK") ===
+# (Kept for compatibility, though we use direct values now)
 SIGNAL_MASK = {
     "LONG_BUILDUP": "ACCUMULATION",
     "SHORT_BUILDUP": "DISTRIBUTION",
@@ -37,6 +37,7 @@ SIGNAL_MASK = {
 
 # === TRADINGVIEW MAPPING ===
 TICKER_CORRECTIONS = {
+    # ... (Your existing TICKER_CORRECTIONS dictionary - Keeping it as is) ...
     "LIC HOUSING FINANCE LTD": "LICHSGFIN", "INOX WIND LIMITED": "INOXWIND",
     "HINDUSTAN ZINC LIMITED": "HINDZINC", "HINDUSTAN UNILEVER LTD.": "HINDUNILVR",
     "TATA TECHNOLOGIES LIMITED": "TATATECH", "SYNGENE INTERNATIONAL LTD": "SYNGENE",
@@ -194,6 +195,8 @@ def load_data_from_dynamodb(target_date, signal_type=None):
         dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
         table = dynamodb.Table(DYNAMODB_TABLE)
         target_date_str = target_date.isoformat()
+        
+        # Scan for INTRADAY_BOOST signals for the selected date
         response = table.scan(FilterExpression=Attr("Date").eq(target_date_str))
         items = response.get('Items', [])
         while 'LastEvaluatedKey' in response:
@@ -215,52 +218,31 @@ def load_data_from_dynamodb(target_date, signal_type=None):
         if 'Signal' in df.columns:
             df = df[df['Signal'] == signal_type].copy()
 
-    # Standardize
+    # Standardize Column Names
     if 'Price' in df.columns and 'SignalPrice' not in df.columns:
         df.rename(columns={'Price': 'SignalPrice'}, inplace=True)
     
-    # --- DIRECTION LOGIC ---
-    if 'Side' in df.columns:
-        df['Direction'] = df['Side'].astype(str).map({'Bullish': 'LONG', 'Bearish': 'SHORT', 'LONG': 'LONG', 'SHORT': 'SHORT'})
-    
-    if 'Direction' not in df.columns or df['Direction'].isnull().all():
-        if 'Signal' in df.columns:
-             df['Direction'] = df['Signal'].map({'LONG': 'LONG', 'SHORT': 'SHORT'})
-
-    # --- SAFE LOAD ---
-    if 'OI_Signal' not in df.columns: df['OI_Signal'] = "N/A"
-    if 'Confidence' not in df.columns: df['Confidence'] = "N/A"
-    if 'OI_Type' not in df.columns: df['OI_Type'] = "CHG"
-    if 'TargetLevel' not in df.columns: df['TargetLevel'] = "N/A"
-    if 'Boost_Notes' not in df.columns: df['Boost_Notes'] = ""
-    if 'Time' not in df.columns: df['Time'] = ""
+    # Ensure Score exists (for backward compatibility if old data is mixed)
+    if 'Score' not in df.columns: df['Score'] = 0.0
+    if 'Staircase' not in df.columns: df['Staircase'] = 'N/A'
+    if 'OI_Change' not in df.columns: df['OI_Change'] = 0.0
+    if 'BreakType' not in df.columns: df['BreakType'] = 'INSIDE'
 
     # Numeric Conversion
-    numeric_cols = ['SignalPrice', 'TargetPrice', 'TargetPct', 'RVOL', 'NetMovePct', 'RS_Score', 'OI_Change', 'Rank', 'Delta_OI', 'Delta_Price']
-    for col in numeric_cols:
-        if col not in df.columns: df[col] = 0.0
-        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
-    
-    if 'BreakType' not in df.columns: df['BreakType'] = "N/A"
-    
-    # --- OBFUSCATE SIGNALS FOR UI ---
-    if 'OI_Signal' in df.columns:
-        df['Display_Phase'] = df['OI_Signal'].map(SIGNAL_MASK).fillna("STABLE")
-    else:
-        df['Display_Phase'] = "STABLE"
+    df['Score'] = pd.to_numeric(df['Score'], errors='coerce').fillna(0)
+    df['SignalPrice'] = pd.to_numeric(df['SignalPrice'], errors='coerce')
+    df['OI_Change'] = pd.to_numeric(df['OI_Change'], errors='coerce').fillna(0)
 
     return df
 
 @st.cache_data(ttl=60)
 def load_history_data(target_date):
-    """Fetches the full timeline history for the day (for Deep Dive view)"""
+    """Fetches full timeline history for Deep Dive"""
     try:
         dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
         table = dynamodb.Table(DYNAMODB_TABLE)
         pk = f"HISTORY#BOOST#{target_date.isoformat()}"
-        response = table.query(
-            KeyConditionExpression=Key('PK').eq(pk)
-        )
+        response = table.query(KeyConditionExpression=Key('PK').eq(pk))
         items = response.get('Items', [])
         while 'LastEvaluatedKey' in response:
             response = table.query(
@@ -274,18 +256,15 @@ def load_history_data(target_date):
         return []
 
 def get_stock_time_series(target_date, stock_name):
-    """Extracts time series for a single stock from the history blob"""
     items = load_history_data(target_date)
     data_points = []
     
     for item in items:
         time_str = item.get('SK')
         try:
-            # The backend saves 'Data' as a JSON string
             raw_data = item.get('Data')
             if isinstance(raw_data, str):
                 snapshot = json.loads(raw_data)
-                # Double decode check
                 if isinstance(snapshot, str): snapshot = json.loads(snapshot)
                 
                 if isinstance(snapshot, list):
@@ -300,15 +279,12 @@ def get_stock_time_series(target_date, stock_name):
         except:
             continue
     
-    if not data_points:
-        return pd.DataFrame()
-        
+    if not data_points: return pd.DataFrame()
     df = pd.DataFrame(data_points)
     return df.sort_values('Time')
 
 @st.cache_data(ttl=60)
 def load_nse_sector_data():
-    """Loads Raw NSE Data from NSE_OI_DATA Table for Sector View"""
     try:
         dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
         table = dynamodb.Table(NSE_OI_TABLE) 
@@ -322,48 +298,6 @@ def load_nse_sector_data():
         st.error(f"Error loading NSE Data: {e}")
     return pd.DataFrame()
 
-def fetch_live_updates(df, target_date):
-    if df.empty or 'Name' not in df.columns: return df
-
-    df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
-    unique_tickers = df['Cleaned_Name'].unique().tolist()
-    yahoo_tickers = [f"{t}.NS" for t in unique_tickers]
-      
-    india_tz = pytz.timezone('Asia/Kolkata')
-    is_today = target_date == datetime.now(india_tz).date()
-      
-    try:
-        if is_today:
-            data = yf.download(tickers=yahoo_tickers, period="1d", interval="1m", progress=False, threads=False)
-            if not data.empty and 'Close' in data:
-                 final_prices = data['Close'].iloc[-1]
-            else: return df
-        else:
-            start_dt = target_date
-            end_dt = target_date + timedelta(days=1)
-            data = yf.download(tickers=yahoo_tickers, start=start_dt, end=end_dt, interval="1d", progress=False, threads=False)
-            if data.empty or 'Close' not in data: return df
-            final_prices = data['Close'].iloc[-1]
-
-        def get_price(ticker, price_series):
-            yf_ticker = f"{ticker}.NS"
-            try:
-                if isinstance(price_series, pd.Series):
-                    if yf_ticker in price_series.index: return float(price_series[yf_ticker])
-                if len(unique_tickers) == 1:
-                    if isinstance(price_series, pd.Series): return float(price_series.iloc[0])
-                    return float(price_series)
-                return 0.0
-            except: return 0.0
-
-        df['Live_Price'] = df['Cleaned_Name'].apply(lambda x: get_price(x, final_prices))
-
-    except Exception as e:
-        print(f"Error fetching data: {e}")
-      
-    df['Live_Price'] = df['Live_Price'] if 'Live_Price' in df.columns else 0.0
-    return df
-
 def metric_card(title, value, subtitle=None, color="#e5e7eb", glow=False):
      return f"""
     <div style="padding:18px;border-radius:14px;background:linear-gradient(145deg,#0f1320,#0c101a);
@@ -375,11 +309,11 @@ def metric_card(title, value, subtitle=None, color="#e5e7eb", glow=False):
     """
 
 # =========================================================
-# PAGE 1: LIVE RADAR (Formerly Blasts)
+# PAGE 1: SMART MONEY RADAR (Top 15 Sorted by Score)
 # =========================================================
 def render_live_alerts(selected_date):
     # CSS & AUTO REFRESH
-    count = st_autorefresh(interval=300 * 1000, key="datarefresh")
+    count = st_autorefresh(interval=60 * 1000, key="datarefresh") # Refresh every 60s
     st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
@@ -392,182 +326,141 @@ def render_live_alerts(selected_date):
     </style>
     """, unsafe_allow_html=True)
 
-    st.subheader("🚀 Live Market Radar")
+    st.subheader("🚀 Smart Money Radar")
+    st.caption("Top Opportunities sorted by Structure + Momentum + Low Risk Entry")
     
-    # --- DATA ---
+    # --- LOAD DATA ---
     df = load_data_from_dynamodb(selected_date, "INTRADAY_BOOST")
     
     if df.empty:
         st.info(f"No signals found for {selected_date}")
         return
 
-    # --- FILTER (UPDATED FOR STAIRCASE) ---
-    blast_mask = df['Boost_Notes'].str.contains("BLAST", case=False, na=False)
-    stair_mask = df['Boost_Notes'].str.contains("STAIRCSE", case=False, na=False) 
-    flow_mask = (df['Confidence'] == "HIGH") & (df['OI_Change'].abs() > 15)
-    
-    # Combine masks to include Staircase alerts even if OI < 15%
-    alerts_df = df[blast_mask | stair_mask | flow_mask].copy()
+    # --- GET LATEST SNAPSHOT ---
+    if 'Time' in df.columns:
+        latest_time = df['Time'].max()
+        latest_df = df[df['Time'] == latest_time].copy()
+    else:
+        latest_df = df.copy() # Fallback if no Time column
 
-    if alerts_df.empty:
-        st.info("Market Radar is quiet. No high-conviction signals yet.")
+    if latest_df.empty:
+        st.warning("Data loaded but no recent snapshot found.")
         return
 
-    # Fetch Live Prices
-    loading_placeholder = st.empty()
-    loading_placeholder.text(f'⚡ Syncing Market Data for {selected_date}...')
-    alerts_df = fetch_live_updates(alerts_df, selected_date)
-    loading_placeholder.empty()
+    # --- SORT BY SCORE ---
+    # Convert Score to numeric just in case
+    latest_df['Score'] = pd.to_numeric(latest_df['Score'], errors='coerce').fillna(0)
+    
+    # Filter: Show top 15 based on Score
+    ranked_df = latest_df.sort_values(by='Score', ascending=False).head(15)
 
-    # Calculations
-    alerts_df['SignalPrice'] = pd.to_numeric(alerts_df['SignalPrice'], errors='coerce')
-    alerts_df['Live_Price'] = pd.to_numeric(alerts_df['Live_Price'], errors='coerce')
-    alerts_df['Live_Move_Pct'] = ((alerts_df['Live_Price'] - alerts_df['SignalPrice']) / alerts_df['SignalPrice']) * 100
-    alerts_df['Live_Move_Pct'] = alerts_df['Live_Move_Pct'].fillna(0.0)
-    alerts_df['Visual_Side'] = alerts_df['Direction'].map({'LONG': '🟢 LONG', 'SHORT': '🔴 SHORT'})
+    # --- METRICS ---
+    # Calculate some summary stats from the Top 15
+    top_score_stock = ranked_df.iloc[0]['Name'] if not ranked_df.empty else "N/A"
+    avg_score = ranked_df['Score'].mean() if not ranked_df.empty else 0
+    staircase_count = len(ranked_df[ranked_df['Staircase'].astype(str).str.contains("✅")])
     
-    # Identify Type (UPDATED LABELS)
-    def get_type(row):
-        notes = str(row['Boost_Notes'])
-        if "BLAST" in notes: return "⚡ VELOCITY SPIKE" 
-        if "STAIRCSE" in notes: return "🪜 STAIRCASE ACCUM." 
-        return "🌊 TREND SURGE"
-    
-    alerts_df['Type'] = alerts_df.apply(get_type, axis=1)
-
-    # --- METRICS (UPDATED CARD LAYOUT) ---
-    total_alerts = len(alerts_df)
-    blast_count = len(alerts_df[alerts_df['Type'] == "⚡ VELOCITY SPIKE"])
-    flow_count = len(alerts_df[alerts_df['Type'] == "🌊 TREND SURGE"])
-    stair_count = len(alerts_df[alerts_df['Type'] == "🪜 STAIRCASE ACCUM."]) 
-    
-    c1, c2, c3, c4 = st.columns(4) 
-    c1.markdown(metric_card("Active Signals", total_alerts, "Total Detections", "#eab308", glow=True), unsafe_allow_html=True)
-    c2.markdown(metric_card("Velocity Spikes", blast_count, "Anomalies", "#60a5fa"), unsafe_allow_html=True)
-    c3.markdown(metric_card("Staircase", stair_count, "Steady Flow", "#a855f7"), unsafe_allow_html=True) 
-    c4.markdown(metric_card("Trend Strength", flow_count, "High Vigor", "#22c55e"), unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3) 
+    c1.markdown(metric_card("Last Updated", latest_time, "Market Time", "#eab308", glow=True), unsafe_allow_html=True)
+    c2.markdown(metric_card("Top Pick", top_score_stock, "Highest Conviction", "#60a5fa"), unsafe_allow_html=True)
+    c3.markdown(metric_card("Strong Structures", f"{staircase_count}/15", "Staircase Confirmed", "#00FF7F"), unsafe_allow_html=True)
 
     st.divider()
 
-    # --- TABLE ---
-    if 'Name' in alerts_df.columns:
-        alerts_df['Cleaned_Name'] = alerts_df['Name'].replace(TICKER_CORRECTIONS)
-        alerts_df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + alerts_df['Cleaned_Name'].str.replace('&', '_').str.replace(' ', '')
-        alerts_df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + alerts_df['TV_Symbol']
+    # --- PREPARE TABLE DATA ---
+    # Add chart links
+    if 'Name' in ranked_df.columns:
+        ranked_df['Cleaned_Name'] = ranked_df['Name'].replace(TICKER_CORRECTIONS)
+        ranked_df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + ranked_df['Cleaned_Name'].str.replace('&', '_').str.replace(' ', '')
+        ranked_df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + ranked_df['TV_Symbol']
 
+    # --- DISPLAY TABLE ---
     with st.container(border=True):
-        st.markdown('<div class="table-header">📡 Detected Signals</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="table-header">🏆 Top 15 Opportunities ({latest_time})</div>', unsafe_allow_html=True)
         
-        if 'Time' in alerts_df.columns:
-            alerts_df = alerts_df.sort_values(by='Time', ascending=False)
-            
         st.data_editor(
-            alerts_df[['Chart', 'Time', 'Name', 'Type', 'Visual_Side', 'SignalPrice', 'Delta_OI', 'OI_Change', 'Display_Phase']], 
+            ranked_df[['Chart', 'Name', 'Score', 'Staircase', 'BreakType', 'OI_Change', 'SignalPrice']], 
             column_config={
                 "Chart": st.column_config.LinkColumn("View", display_text="📊", width="small"),
-                "Time": st.column_config.TextColumn("Time", width="small"),
-                "Name": st.column_config.TextColumn("Ticker", width="medium"),
-                "Type": st.column_config.TextColumn("Signal Type", width="medium"),
-                "Visual_Side": st.column_config.TextColumn("Side", width="small"),
-                "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
-                "Delta_OI": st.column_config.NumberColumn("Impulse (5m)", format="%.2f"), 
-                "OI_Change": st.column_config.NumberColumn("Activity Index", format="%.2f"), 
-                "Display_Phase": st.column_config.TextColumn("Phase Structure"), 
+                "Name": st.column_config.TextColumn("Stock", width="medium"),
+                "Score": st.column_config.ProgressColumn("Smart Score", min_value=0, max_value=50, format="%.1f"),
+                "Staircase": st.column_config.TextColumn("Structure", width="small"),
+                "BreakType": st.column_config.TextColumn("Level Break", width="small"),
+                "OI_Change": st.column_config.NumberColumn("OI Change %", format="%.2f%%"),
+                "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f")
             },
-            hide_index=True, use_container_width=True, disabled=True, key="alerts_table"
+            hide_index=True, use_container_width=True, disabled=True, key="radar_table"
         )
 
 # =========================================================
-# PAGE 2: VELOCITY LEADERBOARD (Formerly Intraday Boost)
+# PAGE 2: VELOCITY LEADERBOARD (Kept for broad view)
 # =========================================================
 def render_intraday_boost(selected_date):
-    st.header("📈 Market Velocity")
-    st.info("Real-time momentum and structural breakdown.")
+    st.header("📈 Market Velocity (Broad View)")
+    st.info("Broader list of market movers (Gainers/Losers).")
 
     df = load_data_from_dynamodb(selected_date, "INTRADAY_BOOST")
     if df.empty:
         st.warning("No data found.")
         return
 
-    # 1. Prepare Chart Links
+    # Filter for latest time to show current state
+    if 'Time' in df.columns:
+        latest_time = df['Time'].max()
+        df = df[df['Time'] == latest_time].copy()
+
+    # Prepare Data
     if 'Name' in df.columns:
         df['Cleaned_Name'] = df['Name'].replace(TICKER_CORRECTIONS)
         df['TV_Symbol'] = DEFAULT_EXCHANGE + ":" + df['Cleaned_Name'].str.replace(' ', '')
         df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + df['TV_Symbol']
 
-    # 2. Ensure Numeric Sorting
-    if 'SignalPrice' in df.columns: df['SignalPrice'] = pd.to_numeric(df['SignalPrice'], errors='coerce')
-    if 'RS_Score' in df.columns: df['RS_Score'] = pd.to_numeric(df['RS_Score'], errors='coerce')
-    if 'OI_Change' in df.columns: df['OI_Change'] = pd.to_numeric(df['OI_Change'], errors='coerce')
-    if 'Delta_OI' in df.columns: df['Delta_OI'] = pd.to_numeric(df['Delta_OI'], errors='coerce') 
-    
-    if 'Rank' in df.columns: df = df.sort_values(by='Rank', ascending=True)
-
-    st.markdown("### 🔥 Market Context")
-
-    # 3. Classification Logic
-    def classify_boost_side(row):
+    # Classification
+    def classify_side(row):
+        # Use new 'Side' column if available, else derive
+        if 'Side' in row and pd.notnull(row['Side']): return str(row['Side']).upper()
+        # Fallback
         r_type = str(row.get('RankType', '')).upper()
-        if 'TOP GAINER' in r_type: return 'LONG'
-        if 'TOP LOSER' in r_type: return 'SHORT'
+        if 'TOP GAINER' in r_type: return 'BULLISH'
+        if 'TOP LOSER' in r_type: return 'BEARISH'
+        return 'NEUTRAL'
 
-        b_type = str(row.get('BreakType', '')).upper()
-        if 'PDH' in b_type or 'PWH' in b_type or 'HIGH' in b_type: return 'LONG'
-        if 'PDL' in b_type or 'PWL' in b_type or 'LOW' in b_type: return 'SHORT'
-        
-        d = str(row.get('Direction', '')).upper()
-        if d == 'LONG' or d == 'BULLISH': return 'LONG'
-        if d == 'SHORT' or d == 'BEARISH': return 'SHORT'
-        
-        return 'UNKNOWN'
-
-    df['Boost_Direction'] = df.apply(classify_boost_side, axis=1)
-
-    df_bull = df[df['Boost_Direction'] == 'LONG'].copy()
-    df_bear = df[df['Boost_Direction'] == 'SHORT'].copy()
+    df['View_Side'] = df.apply(classify_side, axis=1)
+    
+    df_bull = df[df['View_Side'] == 'BULLISH'].sort_values('OI_Change', ascending=False).head(20)
+    df_bear = df[df['View_Side'] == 'BEARISH'].sort_values('OI_Change', ascending=False).head(20)
 
     col1, col2 = st.columns(2)
 
-    # --- DISPLAY COLUMNS ---
-    display_cols = ['Chart', 'Name', 'SignalPrice', 'BreakType', 'Display_Phase', 'OI_Change', 'Delta_OI']
+    display_cols = ['Chart', 'Name', 'SignalPrice', 'BreakType', 'OI_Change']
 
     with col1:
-        st.markdown("#### 🟢 Velocity Gainers")
-        if not df_bull.empty:
-            st.data_editor(
-                df_bull[display_cols],
-                column_config={
-                    "Chart": st.column_config.LinkColumn("View", display_text="📈", width="small"),
-                    "Name": st.column_config.TextColumn("Name", width="medium"),
-                    "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
-                    "BreakType": st.column_config.TextColumn("Status"),
-                    "Display_Phase": st.column_config.TextColumn("Structure"),
-                    "OI_Change": st.column_config.NumberColumn("Part. Index", format="%.2f"),
-                    "Delta_OI": st.column_config.NumberColumn("Impulse (5m)", format="%.2f") 
-                },
-                use_container_width=True, hide_index=True, disabled=True, key="bull_table"
-            )
-        else:
-            st.caption("No Bullish setups found.")
+        st.markdown("#### 🟢 Bullish Momentum")
+        st.data_editor(
+            df_bull[display_cols],
+            column_config={
+                "Chart": st.column_config.LinkColumn("View", display_text="📈", width="small"),
+                "Name": st.column_config.TextColumn("Name", width="medium"),
+                "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
+                "BreakType": st.column_config.TextColumn("Status"),
+                "OI_Change": st.column_config.NumberColumn("OI %", format="%.2f")
+            },
+            use_container_width=True, hide_index=True, disabled=True
+        )
 
     with col2:
-        st.markdown("#### 🔴 Velocity Losers")
-        if not df_bear.empty:
-            st.data_editor(
-                df_bear[display_cols],
-                column_config={
-                    "Chart": st.column_config.LinkColumn("View", display_text="📉", width="small"),
-                    "Name": st.column_config.TextColumn("Name", width="medium"),
-                    "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
-                    "BreakType": st.column_config.TextColumn("Status"),
-                    "Display_Phase": st.column_config.TextColumn("Structure"),
-                    "OI_Change": st.column_config.NumberColumn("Part. Index", format="%.2f"),
-                    "Delta_OI": st.column_config.NumberColumn("Impulse (5m)", format="%.2f") 
-                },
-                use_container_width=True, hide_index=True, disabled=True, key="bear_table"
-            )
-        else:
-            st.caption("No Bearish setups found.")
+        st.markdown("#### 🔴 Bearish Momentum")
+        st.data_editor(
+            df_bear[display_cols],
+            column_config={
+                "Chart": st.column_config.LinkColumn("View", display_text="📉", width="small"),
+                "Name": st.column_config.TextColumn("Name", width="medium"),
+                "SignalPrice": st.column_config.NumberColumn("Price", format="%.2f"),
+                "BreakType": st.column_config.TextColumn("Status"),
+                "OI_Change": st.column_config.NumberColumn("OI %", format="%.2f")
+            },
+            use_container_width=True, hide_index=True, disabled=True
+        )
 
 # =========================================================
 # PAGE 3: SECTOR VIEW
