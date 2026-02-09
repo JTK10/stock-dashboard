@@ -545,12 +545,9 @@ def render_sector_view():
 # =========================================================
 # PAGE 4: AI SIGNAL DASHBOARD (NEW)
 # =========================================================
-# =========================================================
-# PAGE 4: QUANT AI HUD (HIDDEN LOGIC)
-# =========================================================
 def render_ai_signals_view(selected_date):
-    st.header("🧠 Quantum AI Verdicts")
-    st.info("Live signals processed by Gemini 1.5 Neural Architecture.")
+    st.header("🧠 AI Verdicts")
+    st.info("Live AI analysis")
     
     # 1. Load Data
     history_items = load_todays_history_optimized(selected_date)
@@ -560,84 +557,40 @@ def render_ai_signals_view(selected_date):
         
     radar_df = process_radar_data(history_items)
     
-    # 2. Filter
-    if radar_df.empty: return
+    # 2. Filter for stocks that actually have an AI Verdict
+    # We look for rows where 'AI_Decision' is not 'N/A'
+    if radar_df.empty:
+        st.warning("No processed stocks found.")
+        return
+        
     ai_df = radar_df[radar_df['AI_Decision'].isin(['SAFE', 'RISKY', 'WAIT'])].copy()
     
     if ai_df.empty:
-        st.info("⏳ Neural Network Scanning... (No Signals Locked)")
+        st.info("⏳ Waiting for AI Signals... (No active Verdicts yet)")
         return
         
-    # 3. Render High-Tech Cards
+    # 3. Render Cards
     for _, row in ai_df.iterrows():
         decision = row['AI_Decision']
         
-        # Style Logic
-        if "SAFE" in decision:
-            color = "#00FF7F" 
-            bg_grad = "linear-gradient(90deg, rgba(0,255,127,0.1) 0%, rgba(0,0,0,0) 100%)"
-            icon = "🚀"
-            status = "CONFIRMED"
-            conf = "98.4%"
-        elif "RISKY" in decision:
-            color = "#FF4B4B"
-            bg_grad = "linear-gradient(90deg, rgba(255,75,75,0.1) 0%, rgba(0,0,0,0) 100%)"
-            icon = "⚠️"
-            status = "REJECTED"
-            conf = "12.1%"
-        else:
-            color = "#FBBF24"
-            bg_grad = "linear-gradient(90deg, rgba(251,191,36,0.1) 0%, rgba(0,0,0,0) 100%)"
-            icon = "⏸️"
-            status = "HOLD"
-            conf = "45.0%"
-
-        # Fake "Tech" ID for coolness
-        proc_id = f"QNT-{abs(hash(row['Name'])) % 10000}"
-
+        # Color Logic
+        color = "#00FF7F" if "SAFE" in decision else "#FF4B4B" if "RISKY" in decision else "#FBBF24"
+        bg_color = "rgba(0, 255, 127, 0.1)" if "SAFE" in decision else "rgba(255, 75, 75, 0.1)" if "RISKY" in decision else "rgba(251, 191, 36, 0.1)"
+        
         st.markdown(f"""
-        <div style="margin-bottom: 20px; border-left: 4px solid {color}; background: {bg_grad}; padding: 15px; border-radius: 0 12px 12px 0;">
+        <div style="padding: 20px; border-radius: 12px; border: 1px solid {color}; background-color: {bg_color}; margin-bottom: 15px;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                <div style="font-size: 24px; font-weight: 800; color: white;">
-                    {row['Name']} <span style="font-size:14px; color:#6b7280; font-weight:400;">#{proc_id}</span>
-                </div>
-                <div style="text-align:right;">
-                    <div style="font-size: 12px; color: #9ca3af; text-transform: uppercase; letter-spacing: 1px;">AI SIGNAL</div>
-                    <div style="font-size: 20px; font-weight: 900; color: {color}; text-shadow: 0 0 10px {color};">
-                        {icon} {decision}
-                    </div>
-                </div>
+                <h3 style="margin:0; color:white;">{row['Name']}</h3>
+                <span style="background:{color}; color:black; padding:4px 12px; border-radius:4px; font-weight:800;">{decision}</span>
             </div>
-
-            <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
-                <div style="font-size:12px; color:#9ca3af;">CONFIDENCE</div>
-                <div style="flex-grow:1; height:6px; background:#1f2937; border-radius:3px;">
-                    <div style="width:{conf}; height:100%; background:{color}; border-radius:3px; box-shadow: 0 0 8px {color};"></div>
-                </div>
-                <div style="font-size:12px; color:{color}; font-weight:bold;">{conf}</div>
+            <div style="color: #e5e7eb; font-size: 16px; margin-bottom: 10px;">
+                <i>" {row['AI_Reason']} "</i>
             </div>
-
-            <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; background:rgba(0,0,0,0.3); padding:10px; border-radius:8px;">
-                <div style="text-align:center;">
-                    <div style="font-size:10px; color:#6b7280;">MODEL LATENCY</div>
-                    <div style="font-size:14px; color:#e5e7eb;">45ms</div>
-                </div>
-                <div style="text-align:center;">
-                    <div style="font-size:10px; color:#6b7280;">OPTION FLOW</div>
-                    <div style="font-size:14px; color:{color};">{row['OI %']}%</div>
-                </div>
-                <div style="text-align:center;">
-                    <div style="font-size:10px; color:#6b7280;">PCR RATIO</div>
-                    <div style="font-size:14px; color:#e5e7eb;">{row['Option_PCR']}</div>
-                </div>
-                <div style="text-align:center;">
-                    <div style="font-size:10px; color:#6b7280;">RISK CHECK</div>
-                    <div style="font-size:14px; color:{color}; font-weight:bold;">{status}</div>
-                </div>
-            </div>
-            
-            <div style="margin-top:8px; font-size:10px; color:#4b5563; text-align:right;">
-                <i>Processed by Gemini Neural Engine v2.5 • Quant Risk Parameters Verified</i>
+            <div style="display:flex; gap: 20px; font-size: 14px; color: #9ca3af;">
+                <div><strong>PCR:</strong> <span style="color:white;">{row['Option_PCR']}</span></div>
+                <div><strong>MaxPain:</strong> <span style="color:white;">{row['Option_MaxPain']}</span></div>
+                <div><strong>Price:</strong> <span style="color:white;">{row['Current Price']}</span></div>
+                <div><strong>OI Chg:</strong> <span style="color:white;">{row['OI %']}%</span></div>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -662,4 +615,3 @@ elif page == "📈 Market Velocity":
     render_intraday_boost(selected_date)
 elif page == "📊 Sector Heatmap":
     render_sector_view()
-
