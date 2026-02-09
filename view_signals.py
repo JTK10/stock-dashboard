@@ -260,6 +260,13 @@ def process_radar_data(history_items):
                         stock['SnapshotTime'] = time_str
                         stock['SignalPrice'] = float(stock.get('SignalPrice', 0))
                         stock['OI_Change'] = float(stock.get('OI_Change', 0))
+                        
+                        # --- NEW: Extract AI Fields ---
+                        stock['AI_Decision'] = stock.get('AI_Decision', 'N/A')
+                        stock['AI_Reason'] = stock.get('AI_Reason', '')
+                        stock['Option_PCR'] = stock.get('Option_PCR', '0')
+                        stock['Option_MaxPain'] = stock.get('Option_MaxPain', '0')
+                        
                         all_snapshots.append(stock)
         except: continue
             
@@ -320,7 +327,12 @@ def process_radar_data(history_items):
             'Current Price': latest['SignalPrice'],
             'Max Move %': max_move,
             'Current Move %': curr_move,
-            'OI %': latest['OI_Change']
+            'OI %': latest['OI_Change'],
+            # --- AI FIELDS ---
+            'AI_Decision': latest.get('AI_Decision', 'N/A'),
+            'AI_Reason': latest.get('AI_Reason', '-'),
+            'Option_PCR': latest.get('Option_PCR', '-'),
+            'Option_MaxPain': latest.get('Option_MaxPain', '-')
         })
         
     return pd.DataFrame(stats).sort_values('Latest Score', ascending=False)
@@ -531,62 +543,75 @@ def render_sector_view():
     st.dataframe(stats, hide_index=True, use_container_width=True)
 
 # =========================================================
-# PAGE 4: DEEP DIVE
+# PAGE 4: AI SIGNAL DASHBOARD (NEW)
 # =========================================================
-def render_deep_dive_view(selected_date):
-    st.header("🔬 Deep Dive")
+def render_ai_signals_view(selected_date):
+    st.header("🧠 Gemini AI Verdicts")
+    st.info("Live AI analysis from Google Gemini 1.5 Flash.")
+    
+    # 1. Load Data
     history_items = load_todays_history_optimized(selected_date)
-    if not history_items: return
-    
-    names = set()
-    for item in history_items:
-        try:
-            data = json.loads(item.get('Data', '[]'))
-            if isinstance(data, str): data = json.loads(data)
-            for s in data: names.add(s.get('Name'))
-        except: pass
+    if not history_items:
+        st.warning("No data for this date.")
+        return
         
-    selected = st.selectbox("Select Stock", sorted(list(names)))
+    radar_df = process_radar_data(history_items)
     
-    if selected:
-        ts_data = []
-        for item in history_items:
-            time = item.get('SK')
-            try:
-                data = json.loads(item.get('Data', '[]'))
-                if isinstance(data, str): data = json.loads(data)
-                for s in data:
-                    if s.get('Name') == selected:
-                        ts_data.append({
-                            'Time': time, 
-                            'OI': float(s.get('OI_Change',0)), 
-                            'Price': float(s.get('SignalPrice',0))
-                        })
-            except: pass
-            
-        if ts_data:
-            df = pd.DataFrame(ts_data).sort_values('Time')
-            fig = make_subplots(specs=[[{"secondary_y": True}]])
-            fig.add_trace(go.Scatter(x=df['Time'], y=df['OI'], mode='lines', name='OI', line=dict(shape='hv', color='#00FF7F')), secondary_y=False)
-            fig.add_trace(go.Scatter(x=df['Time'], y=df['Price'], name='Price', line=dict(color='#FBBF24')), secondary_y=True)
-            fig.update_layout(title=f"{selected} Structure", template="plotly_dark", height=500)
-            st.plotly_chart(fig, use_container_width=True)
+    # 2. Filter for stocks that actually have an AI Verdict
+    # We look for rows where 'AI_Decision' is not 'N/A'
+    if radar_df.empty:
+        st.warning("No processed stocks found.")
+        return
+        
+    ai_df = radar_df[radar_df['AI_Decision'].isin(['SAFE', 'RISKY', 'WAIT'])].copy()
+    
+    if ai_df.empty:
+        st.info("⏳ Waiting for AI Signals... (No active Verdicts yet)")
+        return
+        
+    # 3. Render Cards
+    for _, row in ai_df.iterrows():
+        decision = row['AI_Decision']
+        
+        # Color Logic
+        color = "#00FF7F" if "SAFE" in decision else "#FF4B4B" if "RISKY" in decision else "#FBBF24"
+        bg_color = "rgba(0, 255, 127, 0.1)" if "SAFE" in decision else "rgba(255, 75, 75, 0.1)" if "RISKY" in decision else "rgba(251, 191, 36, 0.1)"
+        
+        st.markdown(f"""
+        <div style="padding: 20px; border-radius: 12px; border: 1px solid {color}; background-color: {bg_color}; margin-bottom: 15px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <h3 style="margin:0; color:white;">{row['Name']}</h3>
+                <span style="background:{color}; color:black; padding:4px 12px; border-radius:4px; font-weight:800;">{decision}</span>
+            </div>
+            <div style="color: #e5e7eb; font-size: 16px; margin-bottom: 10px;">
+                <i>" {row['AI_Reason']} "</i>
+            </div>
+            <div style="display:flex; gap: 20px; font-size: 14px; color: #9ca3af;">
+                <div><strong>PCR:</strong> <span style="color:white;">{row['Option_PCR']}</span></div>
+                <div><strong>MaxPain:</strong> <span style="color:white;">{row['Option_MaxPain']}</span></div>
+                <div><strong>Price:</strong> <span style="color:white;">{row['Current Price']}</span></div>
+                <div><strong>OI Chg:</strong> <span style="color:white;">{row['OI %']}%</span></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
 # =========================================================
 # MAIN
 # =========================================================
 with st.sidebar:
     st.title("QUANT RADAR")
-    page = st.radio("Navigate", ["🚀 Smart Radar", "📈 Market Velocity", "📊 Sector Heatmap", "🔬 Deep Dive"])
+    # UPDATED MENU
+    page = st.radio("Navigate", ["🚀 Smart Radar", "🧠 AI SIGNAL", "📈 Market Velocity", "📊 Sector Heatmap"])
+    
     india_tz = pytz.timezone('Asia/Kolkata')
     selected_date = st.date_input("📅 Select Date", datetime.now(india_tz).date())
     if st.button("🔄 Refresh"): st.cache_data.clear(); st.rerun()
 
 if page == "🚀 Smart Radar":
     render_live_alerts(selected_date)
+elif page == "🧠 AI SIGNAL":
+    render_ai_signals_view(selected_date)
 elif page == "📈 Market Velocity":
     render_intraday_boost(selected_date)
 elif page == "📊 Sector Heatmap":
     render_sector_view()
-elif page == "🔬 Deep Dive":
-    render_deep_dive_view(selected_date)
