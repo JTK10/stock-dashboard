@@ -291,7 +291,7 @@ def process_radar_data(history_items):
         if is_break: score += 10
         if "PWH" in break_type or "PWL" in break_type: score += 10
         
-        # 3. Entry Logic (LOWERED THRESHOLD TO 1.5% TO CATCH EARLY)
+        # 3. Entry Logic
         if score > 20:
             potential_entries = group[(group['OI_Change'].abs() > 1.5) & (group['BreakType'].astype(str).str.contains("BROKE", na=False))]
             
@@ -317,6 +317,20 @@ def process_radar_data(history_items):
         else:
              entry_time, entry_price, max_move, curr_move = "-", 0, 0, 0
 
+        # --- FIX: LOOK FOR LAST VALID AI VERDICT ---
+        # Instead of just checking 'latest', we look for the last row where AI_Decision is NOT N/A
+        valid_ai_rows = group[group['AI_Decision'].isin(['SAFE', 'RISKY', 'WAIT', 'BULLISH', 'BEARISH'])]
+        
+        if not valid_ai_rows.empty:
+            last_valid_ai = valid_ai_rows.iloc[-1]
+            ai_decision = last_valid_ai['AI_Decision']
+            ai_reason = last_valid_ai['AI_Reason']
+            ai_time = last_valid_ai['SnapshotTime'] # Capture Time
+        else:
+            ai_decision = "N/A"
+            ai_reason = "-"
+            ai_time = "-"
+
         stats.append({
             'Name': stock_name,
             'Latest Score': round(score, 1),
@@ -328,9 +342,10 @@ def process_radar_data(history_items):
             'Max Move %': max_move,
             'Current Move %': curr_move,
             'OI %': latest['OI_Change'],
-            # --- AI FIELDS ---
-            'AI_Decision': latest.get('AI_Decision', 'N/A'),
-            'AI_Reason': latest.get('AI_Reason', '-'),
+            # --- PERSISTENT AI FIELDS ---
+            'AI_Decision': ai_decision,
+            'AI_Reason': ai_reason,
+            'AI_Time': ai_time,
             'Option_PCR': latest.get('Option_PCR', '-'),
             'Option_MaxPain': latest.get('Option_MaxPain', '-')
         })
@@ -572,6 +587,7 @@ def render_ai_signals_view(selected_date):
     # 3. Render Cards
     for _, row in ai_df.iterrows():
         decision = row['AI_Decision']
+        ai_time = row['AI_Time'] # Retrieve the time
         
         # Color Logic
         color = "#00FF7F" if "SAFE" in decision else "#FF4B4B" if "RISKY" in decision else "#FBBF24"
@@ -581,7 +597,10 @@ def render_ai_signals_view(selected_date):
         <div style="padding: 20px; border-radius: 12px; border: 1px solid {color}; background-color: {bg_color}; margin-bottom: 15px;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
                 <h3 style="margin:0; color:white;">{row['Name']}</h3>
-                <span style="background:{color}; color:black; padding:4px 12px; border-radius:4px; font-weight:800;">{decision}</span>
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <span style="color:#9ca3af; font-size:12px; font-family:monospace;">🕒 {ai_time}</span>
+                    <span style="background:{color}; color:black; padding:4px 12px; border-radius:4px; font-weight:800;">{decision}</span>
+                </div>
             </div>
             <div style="color: #e5e7eb; font-size: 16px; margin-bottom: 10px;">
                 <i>" {row['AI_Reason']} "</i>
