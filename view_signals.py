@@ -278,7 +278,7 @@ def process_radar_data(history_items):
     for stock_name, group in df_full.groupby('Name'):
         group = group.sort_values('SnapshotTime')
         latest = group.iloc[-1]
-        latest_score = float(latest.get("Score", 0))
+        latest_score = float(latest.get("Score", latest.get("Best_Score", 0)))
         break_type = str(latest.get('BreakType', 'INSIDE')).upper()
         
         # 3. Entry Logic
@@ -443,7 +443,7 @@ def render_live_alerts(selected_date):
     display_df['Chart'] = "https://www.tradingview.com/chart/?symbol=" + display_df['TV_Symbol']
 
     # 5. Metrics
-    latest_time_val = max([x.get('SK', '00:00') for x in history_items]) if history_items else "N/A"
+    latest_time_val = max([x.get('SK', '00:00') or "00:00" for x in history_items]) if history_items else "N/A"
     top_stock = display_df.iloc[0]['Name'] if not display_df.empty else "-"
     
     c1, c2, c3 = st.columns(3)
@@ -603,8 +603,19 @@ def render_ai_signals_view(selected_date):
         ai_time = row['AI_Time'] # Retrieve the time
         
         # Color Logic
-        color = "#00FF7F" if "SAFE" in decision else "#FF4B4B" if "RISKY" in decision else "#FBBF24"
-        bg_color = "rgba(0, 255, 127, 0.1)" if "SAFE" in decision else "rgba(255, 75, 75, 0.1)" if "RISKY" in decision else "rgba(251, 191, 36, 0.1)"
+        
+        if decision == "AI_SELECTED":
+           color = "#00FF7F"
+           bg_color = "rgba(0,255,127,0.1)"
+        elif decision == "FALLBACK_SELECTED":
+             color = "#FBBF24"
+             bg_color = "rgba(251,191,36,0.1)"
+        else:
+            color = "#9ca3af"
+            bg_color = "rgba(156,163,175,0.1)"
+
+
+
         
         st.markdown(f"""
         <div style="padding: 20px; border-radius: 12px; border: 1px solid {color}; background-color: {bg_color}; margin-bottom: 15px;">
@@ -649,4 +660,5 @@ elif page == "📈 Market Velocity":
     render_intraday_boost(selected_date)
 elif page == "📊 Sector Heatmap":
     render_sector_view()
+
 
