@@ -278,21 +278,11 @@ def process_radar_data(history_items):
     for stock_name, group in df_full.groupby('Name'):
         group = group.sort_values('SnapshotTime')
         latest = group.iloc[-1]
+        latest_score = float(latest.get("Score", 0))
         break_type = str(latest.get('BreakType', 'INSIDE')).upper()
         
-        # --- RE-CALCULATE SCORE & STAIRCASE (FAIL-SAFE) ---
-        history_ois = group['OI_Change'].tolist()
-        is_staircase = calculate_staircase_locally(history_ois, break_type)
-        is_break = ("PDH" in break_type) or ("PDL" in break_type)
-        
-        # Recalculate Score
-        score = abs(latest['OI_Change'])
-        if is_staircase: score += 15
-        if is_break: score += 10
-        if "PWH" in break_type or "PWL" in break_type: score += 10
-        
         # 3. Entry Logic
-        if score > 20:
+        if latest_score > 20:
             potential_entries = group[(group['OI_Change'].abs() > 1.5) & (group['BreakType'].astype(str).str.contains("BROKE", na=False))]
             
             if not potential_entries.empty:
@@ -319,7 +309,7 @@ def process_radar_data(history_items):
 
         # --- FIX: LOOK FOR LAST VALID AI VERDICT ---
         # Instead of just checking 'latest', we look for the last row where AI_Decision is NOT N/A
-        valid_ai_rows = group[group['AI_Decision'].isin(['SAFE', 'RISKY', 'WAIT', 'BULLISH', 'BEARISH'])]
+        valid_ai_rows = group[group['AI_Decision'].isin(['AI_SELECTED', 'FALLBACK_SELECTED'])]
         
         if not valid_ai_rows.empty:
             last_valid_ai = valid_ai_rows.iloc[-1]
@@ -333,8 +323,7 @@ def process_radar_data(history_items):
 
         stats.append({
             'Name': stock_name,
-            'Latest Score': round(score, 1),
-            'Staircase': "✅" if is_staircase else "❌",
+            'Latest Score': round(latest_score, 1),
             'Break': latest.get('BreakType', 'INSIDE'),
             'Entry Time': entry_time,
             'Entry Price': entry_price,
@@ -389,6 +378,17 @@ def load_nse_sector_data():
     except: pass
     return pd.DataFrame()
 
+@st.cache_data(ttl=60)
+def load_lock_data(target_date):
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
+        table = dynamodb.Table(DYNAMODB_TABLE)
+        pk = f"DAILY_UNIQUE_LOCK#{target_date.isoformat()}"
+        response = table.query(KeyConditionExpression=Key('PK').eq(pk))
+        return response.get("Items", [])
+    except:
+        return []
+
 def metric_card(title, value, subtitle=None, color="#e5e7eb", glow=False):
      return f"""
     <div style="padding:18px;border-radius:14px;background:linear-gradient(145deg,#0f1320,#0c101a);
@@ -424,6 +424,12 @@ def render_live_alerts(selected_date):
 
     # 2. Process
     radar_df = process_radar_data(history_items)
+    locks = load_lock_data(selected_date)
+    lock_map = {x["Stock"]: x for x in locks}
+
+    radar_df["Locked"] = radar_df["Name"].apply(lambda x: "🔒" if x in lock_map else "")
+    radar_df["Lock Time"] = radar_df["Name"].apply(lambda x: lock_map[x]["Lock_Time"] if x in lock_map else "-")
+    radar_df["Reentry"] = radar_df["Name"].apply(lambda x: lock_map[x]["Reentry_Time"] if x in lock_map and lock_map[x].get("Reentry_Time") else "-")
     if radar_df.empty:
         st.warning("No valid stocks found.")
         return
@@ -449,14 +455,16 @@ def render_live_alerts(selected_date):
     
     st.data_editor(
         display_df[[
-            'Chart', 'Name', 'Latest Score', 'Staircase', 'Break', 
+            'Chart', 'Name', 'Latest Score', 'Locked', 'Lock Time', 'Reentry', 'Break',
             'Entry Time', 'Entry Price', 'Current Price', 'Max Move %', 'Current Move %', 'OI %'
         ]],
         column_config={
             "Chart": st.column_config.LinkColumn("View", display_text="📊", width="small"),
             "Name": st.column_config.TextColumn("Stock", width="medium"),
             "Latest Score": st.column_config.ProgressColumn("Smart Score", min_value=0, max_value=60, format="%.1f"),
-            "Staircase": st.column_config.TextColumn("Struct", width="small"),
+            "Locked": st.column_config.TextColumn("Locked", width="small"),
+            "Lock Time": st.column_config.TextColumn("Lock Time", width="small"),
+            "Reentry": st.column_config.TextColumn("Reentry", width="small"),
             "Break": st.column_config.TextColumn("Lvl Break", width="small"),
             "Entry Time": st.column_config.TextColumn("1st Signal", width="small"),
             "Entry Price": st.column_config.NumberColumn("Entry ₹", format="%.1f"),
@@ -571,6 +579,9 @@ def render_ai_signals_view(selected_date):
         return
         
     radar_df = process_radar_data(history_items)
+    locks = load_lock_data(selected_date)
+    lock_map = {x["Stock"]: x for x in locks}
+    radar_df["Lock Time"] = radar_df["Name"].apply(lambda x: lock_map[x]["Lock_Time"] if x in lock_map else "-")
     
     # 2. Filter for stocks that actually have an AI Verdict
     # We look for rows where 'AI_Decision' is not 'N/A'
@@ -578,7 +589,7 @@ def render_ai_signals_view(selected_date):
         st.warning("No processed stocks found.")
         return
         
-    ai_df = radar_df[radar_df['AI_Decision'].isin(['SAFE', 'RISKY', 'WAIT'])].copy()
+    ai_df = radar_df[radar_df['AI_Decision'].isin(['AI_SELECTED', 'FALLBACK_SELECTED'])].copy()
     
     if ai_df.empty:
         st.info("⏳ Waiting for AI Signals... (No active Verdicts yet)")
@@ -610,6 +621,8 @@ def render_ai_signals_view(selected_date):
                 <div><strong>MaxPain:</strong> <span style="color:white;">{row['Option_MaxPain']}</span></div>
                 <div><strong>Price:</strong> <span style="color:white;">{row['Current Price']}</span></div>
                 <div><strong>OI Chg:</strong> <span style="color:white;">{row['OI %']}%</span></div>
+                <div><strong>Lock Time:</strong> {row.get('Lock Time','-')}</div>
+                <div><strong>Score:</strong> {row.get('Latest Score','-')}</div>
             </div>
         </div>
         """, unsafe_allow_html=True)
