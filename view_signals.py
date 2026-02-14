@@ -449,6 +449,8 @@ def render_live_alerts(selected_date):
     c1, c2, c3 = st.columns(3)
     c1.markdown(metric_card("Last Update", latest_time_val, "Time", "#eab308", glow=True), unsafe_allow_html=True)
     c2.markdown(metric_card("Top Pick", top_stock, "Highest Score", "#00FF7F"), unsafe_allow_html=True)
+    c3.markdown(metric_card("Locked Today", len(lock_map), "Unique Stocks", "#38bdf8"), unsafe_allow_html=True)
+
     
     st.divider()
     st.markdown('<div class="table-header">🏆 Top Opportunities</div>', unsafe_allow_html=True)
@@ -647,3 +649,4 @@ elif page == "📈 Market Velocity":
     render_intraday_boost(selected_date)
 elif page == "📊 Sector Heatmap":
     render_sector_view()
+
