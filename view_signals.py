@@ -11,7 +11,7 @@ from streamlit_autorefresh import st_autorefresh
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
-import gc 
+import gc
 
 # --- 0. MEMORY CLEANUP ---
 gc.collect()
@@ -20,9 +20,9 @@ gc.collect()
 st.set_page_config(page_title="Market Radar", layout="wide", page_icon="📡")
 
 # --- CONFIG ---
-AWS_REGION = os.getenv("AWS_REGION", "ap-south-1") 
+AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
 DYNAMODB_TABLE = os.getenv("DYNAMODB_TABLE", "SentAlerts")
-NSE_OI_TABLE = "NSE_OI_DATA" 
+NSE_OI_TABLE = "NSE_OI_DATA"
 DEFAULT_EXCHANGE = "NSE"
 
 # === TRADINGVIEW MAPPING ===
@@ -390,7 +390,7 @@ def load_lock_data(target_date):
         return []
 
 def metric_card(title, value, subtitle=None, color="#e5e7eb", glow=False):
-     return f"""
+    return f"""
     <div style="padding:18px;border-radius:14px;background:linear-gradient(145deg,#0f1320,#0c101a);
     border:1px solid #222634;box-shadow:{'0 0 12px rgba(34,197,94,.35)' if glow else 'none'};">
         <div style="color:#9ca3af;font-size:14px;margin-bottom:6px;">{title}</div>
@@ -603,7 +603,6 @@ def render_ai_signals_view(selected_date):
         ai_time = row['AI_Time'] # Retrieve the time
         
         # Color Logic
-        
         if decision == "AI_SELECTED":
            color = "#00FF7F"
            bg_color = "rgba(0,255,127,0.1)"
@@ -614,9 +613,6 @@ def render_ai_signals_view(selected_date):
             color = "#9ca3af"
             bg_color = "rgba(156,163,175,0.1)"
 
-
-
-        
         st.markdown(f"""
         <div style="padding: 20px; border-radius: 12px; border: 1px solid {color}; background-color: {bg_color}; margin-bottom: 15px;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
@@ -660,5 +656,3 @@ elif page == "📈 Market Velocity":
     render_intraday_boost(selected_date)
 elif page == "📊 Sector Heatmap":
     render_sector_view()
-
-
