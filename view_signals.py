@@ -389,6 +389,21 @@ def load_lock_data(target_date):
     except:
         return []
 
+@st.cache_data(ttl=60)
+def load_swing_candidates(selected_date):
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
+        table = dynamodb.Table(DYNAMODB_TABLE)
+
+        pk = f"SWING_CANDIDATE#{selected_date.isoformat()}"
+        response = table.query(KeyConditionExpression=Key('PK').eq(pk))
+        items = response.get("Items", [])
+        return items
+
+    except Exception as e:
+        st.error(f"Error loading swing data: {e}")
+        return []
+
 def metric_card(title, value, subtitle=None, color="#e5e7eb", glow=False):
     return f"""
     <div style="padding:18px;border-radius:14px;background:linear-gradient(145deg,#0f1320,#0c101a);
@@ -636,13 +651,90 @@ def render_ai_signals_view(selected_date):
         </div>
         """, unsafe_allow_html=True)
 
+def render_swing_dashboard(selected_date):
+
+    st.header("📊 Swing Trading Engine")
+    st.info("Daily Hybrid Adaptive Swing Model")
+
+    swing_items = load_swing_candidates(selected_date)
+
+    if not swing_items:
+        st.warning("No swing candidate stored for this date.")
+        return
+
+    df = pd.DataFrame(swing_items)
+    if "Symbol" not in df.columns:
+        df["Symbol"] = df["Name"] if "Name" in df.columns else "-"
+    if "Direction" not in df.columns:
+        df["Direction"] = "-"
+    if "Confidence" not in df.columns:
+        df["Confidence"] = 0
+    if "Setup" not in df.columns:
+        df["Setup"] = "-"
+    if "Status" not in df.columns:
+        df["Status"] = "-"
+    if "Close" not in df.columns:
+        df["Close"] = np.nan
+
+    if "Triggered_At" in df.columns:
+        df["Entry Trigger Time"] = df["Triggered_At"]
+    elif "Entry_Trigger_Time" in df.columns:
+        df["Entry Trigger Time"] = df["Entry_Trigger_Time"]
+    elif "Trigger_Time" in df.columns:
+        df["Entry Trigger Time"] = df["Trigger_Time"]
+    else:
+        df["Entry Trigger Time"] = "-"
+
+    df["Entry Trigger Time"] = df["Entry Trigger Time"].fillna("-")
+    df["Confidence"] = pd.to_numeric(df["Confidence"], errors="coerce").fillna(0).clip(0, 100)
+    df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+
+    # TradingView link
+    df["Cleaned_Name"] = df["Symbol"].replace(TICKER_CORRECTIONS)
+    df["TV_Symbol"] = DEFAULT_EXCHANGE + ":" + df["Cleaned_Name"].str.replace(" ", "")
+    df["Chart"] = "https://www.tradingview.com/chart/?symbol=" + df["TV_Symbol"]
+
+    st.data_editor(
+        df[[
+            "Chart",
+            "Symbol",
+            "Direction",
+            "Confidence",
+            "Setup",
+            "Status",
+            "Entry Trigger Time",
+            "Close"
+        ]],
+        column_config={
+            "Chart": st.column_config.LinkColumn("Chart", display_text="📊", width="small"),
+            "Symbol": st.column_config.TextColumn("Stock"),
+            "Direction": st.column_config.TextColumn("Side"),
+            "Confidence": st.column_config.ProgressColumn("Confidence", min_value=0, max_value=100),
+            "Setup": st.column_config.TextColumn("Setup"),
+            "Status": st.column_config.TextColumn("Status"),
+            "Entry Trigger Time": st.column_config.TextColumn("Entry Trigger"),
+            "Close": st.column_config.NumberColumn("Close Price", format="%.2f")
+        },
+        use_container_width=True,
+        hide_index=True
+    )
+
 # =========================================================
 # MAIN
 # =========================================================
 with st.sidebar:
     st.title("QUANT RADAR")
     # UPDATED MENU
-    page = st.radio("Navigate", ["🚀 Smart Radar", "🧠 AI SIGNAL", "📈 Market Velocity", "📊 Sector Heatmap"])
+    page = st.radio(
+        "Navigate",
+        [
+            "🚀 Smart Radar",
+            "📊 Swing Trading",
+            "🧠 AI SIGNAL",
+            "📈 Market Velocity",
+            "📊 Sector Heatmap"
+        ]
+    )
     
     india_tz = pytz.timezone('Asia/Kolkata')
     selected_date = st.date_input("📅 Select Date", datetime.now(india_tz).date())
@@ -650,6 +742,8 @@ with st.sidebar:
 
 if page == "🚀 Smart Radar":
     render_live_alerts(selected_date)
+elif page == "📊 Swing Trading":
+    render_swing_dashboard(selected_date)
 elif page == "🧠 AI SIGNAL":
     render_ai_signals_view(selected_date)
 elif page == "📈 Market Velocity":
