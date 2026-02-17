@@ -586,36 +586,38 @@ def render_sector_view():
 # PAGE 4: AI SIGNAL DASHBOARD (NEW)
 # =========================================================
 def render_ai_signals_view(selected_date):
+    st_autorefresh(interval=60 * 1000, key="datarefresh_ai")
+    
     st.header("🧠 AI Verdicts")
     st.info("Live AI analysis")
     
-    # 1. Load Data
-    history_items = load_todays_history_optimized(selected_date)
-    if not history_items:
+    # --- CHANGED: Load from the LIVE DDB items, not the history blob ---
+    ai_df = load_data_from_dynamodb(selected_date, "INTRADAY_BOOST")
+    
+    if ai_df.empty:
         st.warning("No data for this date.")
         return
         
-    radar_df = process_radar_data(history_items)
-    locks = load_lock_data(selected_date)
-    lock_map = {x["Stock"]: x for x in locks}
-    radar_df["Lock Time"] = radar_df["Name"].apply(lambda x: lock_map[x]["Lock_Time"] if x in lock_map else "-")
-    
-    # 2. Filter for stocks that actually have an AI Verdict
-    # We look for rows where 'AI_Decision' is not 'N/A'
-    if radar_df.empty:
-        st.warning("No processed stocks found.")
-        return
-        
-    ai_df = radar_df[radar_df['AI_Decision'].isin(['AI_SELECTED', 'FALLBACK_SELECTED'])].copy()
+    # Filter for stocks that actually have an AI Verdict
+    ai_df = ai_df[ai_df['AI_Decision'].isin(['AI_SELECTED', 'FALLBACK_SELECTED'])].copy()
     
     if ai_df.empty:
         st.info("⏳ Waiting for AI Signals... (No active Verdicts yet)")
         return
         
+    locks = load_lock_data(selected_date)
+    lock_map = {x["Stock"]: x for x in locks}
+    
+    # Sort so newest are at the top (optional, assuming 'Time' is present)
+    if 'Time' in ai_df.columns:
+        ai_df = ai_df.sort_values(by='Time', ascending=False)
+        
     # 3. Render Cards
     for _, row in ai_df.iterrows():
         decision = row['AI_Decision']
-        ai_time = row['AI_Time'] # Retrieve the time
+        ai_time = row.get('Signal_Generated_At', row.get('Time', '-'))
+        stock_name = row['Name']
+        lock_time = lock_map[stock_name]["Lock_Time"] if stock_name in lock_map else "-"
         
         # Color Logic
         if decision == "AI_SELECTED":
@@ -631,22 +633,21 @@ def render_ai_signals_view(selected_date):
         st.markdown(f"""
         <div style="padding: 20px; border-radius: 12px; border: 1px solid {color}; background-color: {bg_color}; margin-bottom: 15px;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                <h3 style="margin:0; color:white;">{row['Name']}</h3>
+                <h3 style="margin:0; color:white;">{stock_name}</h3>
                 <div style="display:flex; align-items:center; gap:10px;">
                     <span style="color:#9ca3af; font-size:12px; font-family:monospace;">🕒 {ai_time}</span>
                     <span style="background:{color}; color:black; padding:4px 12px; border-radius:4px; font-weight:800;">{decision}</span>
                 </div>
             </div>
             <div style="color: #e5e7eb; font-size: 16px; margin-bottom: 10px;">
-                <i>" {row['AI_Reason']} "</i>
+                <i>" {row.get('AI_Reason', '-')} "</i>
             </div>
             <div style="display:flex; gap: 20px; font-size: 14px; color: #9ca3af;">
-                <div><strong>PCR:</strong> <span style="color:white;">{row['Option_PCR']}</span></div>
-                <div><strong>MaxPain:</strong> <span style="color:white;">{row['Option_MaxPain']}</span></div>
-                <div><strong>Price:</strong> <span style="color:white;">{row['Current Price']}</span></div>
-                <div><strong>OI Chg:</strong> <span style="color:white;">{row['OI %']}%</span></div>
-                <div><strong>Lock Time:</strong> {row.get('Lock Time','-')}</div>
-                <div><strong>Score:</strong> {row.get('Latest Score','-')}</div>
+                <div><strong>Price:</strong> <span style="color:white;">{row.get('SignalPrice', '-')}</span></div>
+                <div><strong>OI Chg:</strong> <span style="color:white;">{row.get('OI_Change', '-')}%</span></div>
+                <div><strong>RS Score:</strong> <span style="color:white;">{row.get('RS_Score', '-')}</span></div>
+                <div><strong>Lock Time:</strong> {lock_time}</div>
+                <div><strong>Score:</strong> {row.get('Score','-')}</div>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -750,3 +751,4 @@ elif page == "📈 Market Velocity":
     render_intraday_boost(selected_date)
 elif page == "📊 Sector Heatmap":
     render_sector_view()
+
