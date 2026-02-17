@@ -591,16 +591,18 @@ def render_ai_signals_view(selected_date):
     st.header("🧠 AI Verdicts")
     st.info("Live AI analysis")
     
-    # --- CHANGED: Load from the LIVE DDB items, not the history blob ---
-    ai_df = load_data_from_dynamodb(selected_date, "INTRADAY_BOOST")
+    # 1. Load Data directly from the LIVE DDB items
+    ai_df = load_data_from_dynamodb(selected_date)
     
-    if ai_df.empty:
-        st.warning("No data for this date.")
+    # SAFETY CHECK 1: Is there data, and does the AI column exist yet?
+    if ai_df.empty or 'AI_Decision' not in ai_df.columns:
+        st.info("⏳ Waiting for AI Signals... (No active Verdicts yet)")
         return
         
     # Filter for stocks that actually have an AI Verdict
     ai_df = ai_df[ai_df['AI_Decision'].isin(['AI_SELECTED', 'FALLBACK_SELECTED'])].copy()
     
+    # SAFETY CHECK 2: After filtering, do we have any winners?
     if ai_df.empty:
         st.info("⏳ Waiting for AI Signals... (No active Verdicts yet)")
         return
@@ -608,7 +610,7 @@ def render_ai_signals_view(selected_date):
     locks = load_lock_data(selected_date)
     lock_map = {x["Stock"]: x for x in locks}
     
-    # Sort so newest are at the top (optional, assuming 'Time' is present)
+    # Sort so newest are at the top
     if 'Time' in ai_df.columns:
         ai_df = ai_df.sort_values(by='Time', ascending=False)
         
@@ -616,7 +618,10 @@ def render_ai_signals_view(selected_date):
     for _, row in ai_df.iterrows():
         decision = row['AI_Decision']
         ai_time = row.get('Signal_Generated_At', row.get('Time', '-'))
-        stock_name = row['Name']
+        if pd.isna(ai_time) or str(ai_time).strip() == "": 
+            ai_time = row.get('Time', '-')
+            
+        stock_name = row.get('Name', 'Unknown')
         lock_time = lock_map[stock_name]["Lock_Time"] if stock_name in lock_map else "-"
         
         # Color Logic
@@ -751,4 +756,5 @@ elif page == "📈 Market Velocity":
     render_intraday_boost(selected_date)
 elif page == "📊 Sector Heatmap":
     render_sector_view()
+
 
