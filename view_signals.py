@@ -331,7 +331,7 @@ def process_radar_data(history_items):
             'Max Move %': max_move,
             'Current Move %': curr_move,
             'OI %': latest['OI_Change'],
-            # --- PERSISTENT AI FIELDS ---
+            # --- PERSISTENT AI Fields ---
             'AI_Decision': ai_decision,
             'AI_Reason': ai_reason,
             'AI_Time': ai_time,
@@ -366,26 +366,6 @@ def load_data_from_dynamodb(target_date, signal_type=None):
     for c in numeric: 
         if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
     return df
-
-
-@st.cache_data(ttl=60)
-def load_ai_signals_fast(target_date):
-    """Lightning-fast query to pull only today's AI signals without scanning the whole DB."""
-    try:
-        dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
-        table = dynamodb.Table(DYNAMODB_TABLE)
-        
-        # Directly query the exact Partition Key where the bot saves live signals
-        pk = f"SIGNAL#INTRADAY_BOOST#{target_date.isoformat()}"
-        
-        response = table.query(KeyConditionExpression=Key('PK').eq(pk))
-        items = response.get('Items', [])
-        
-        # If your data has Decimals, convert them
-        df = pd.DataFrame([convert_decimal(item) for item in items])
-        return df
-    except Exception as e:
-        return pd.DataFrame()
 
 @st.cache_data(ttl=60)
 def load_nse_sector_data():
@@ -603,7 +583,7 @@ def render_sector_view():
     st.dataframe(stats, hide_index=True, use_container_width=True)
 
 # =========================================================
-# PAGE 4: AI SIGNAL DASHBOARD (NEW)
+# PAGE 4: AI SIGNAL DASHBOARD (FINAL FIX)
 # =========================================================
 def render_ai_signals_view(selected_date):
     import traceback
@@ -612,49 +592,55 @@ def render_ai_signals_view(selected_date):
         st.header("🧠 AI Verdicts")
         st.info("Live AI analysis")
         
-        # --- FIX: Use the lightning-fast query instead of scanning! ---
-        ai_df = load_ai_signals_fast(selected_date)
+        # 1. Load data using your proven DB scanner
+        ai_df = load_data_from_dynamodb(selected_date)
         
-        # SAFETY CHECK 1: Is there data, and does the AI column exist yet?
+        if ai_df.empty:
+            st.info("⏳ Waiting for AI Signals... (No data found for today)")
+            return
+            
+        # 2. THE FIX: Filter exactly by your Sort Key!
+        if 'SK' in ai_df.columns:
+            ai_df = ai_df[ai_df['SK'] == 'SIGNAL#INTRADAY_BOOST#LIVE'].copy()
+            
+        # 3. Ensure the AI column actually exists and filter for selections
         if ai_df.empty or 'AI_Decision' not in ai_df.columns:
             st.info("⏳ Waiting for AI Signals... (No active Verdicts yet)")
             return
             
-        # Filter for stocks that actually have an AI Verdict
         ai_df = ai_df[ai_df['AI_Decision'].isin(['AI_SELECTED', 'FALLBACK_SELECTED'])].copy()
         
-        # SAFETY CHECK 2: After filtering, do we have any winners?
         if ai_df.empty:
             st.info("⏳ Waiting for AI Signals... (No active Verdicts yet)")
             return
             
+        # 4. Load Locks
         locks = load_lock_data(selected_date)
-        lock_map = {x["Stock"]: x for x in locks}
+        lock_map = {x.get("Stock", ""): x for x in locks}
         
-        # Sort so newest are at the top
+        # 5. Sort newest to top
         if 'Time' in ai_df.columns:
             ai_df = ai_df.sort_values(by='Time', ascending=False)
             
-        # 3. Render Cards
+        # 6. Render the Cards
         for _, row in ai_df.iterrows():
-            decision = row['AI_Decision']
-            ai_time = row.get('Signal_Generated_At', row.get('Time', '-'))
-            if pd.isna(ai_time) or str(ai_time).strip() == "": 
-                ai_time = row.get('Time', '-')
+            decision = str(row.get('AI_Decision', 'N/A'))
+            
+            # Safely grab the time
+            ai_time = str(row.get('Signal_Generated_At', row.get('Time', '-')))
+            if pd.isna(ai_time) or ai_time.strip() in ["", "nan"]: 
+                ai_time = str(row.get('Time', '-'))
                 
-            stock_name = row.get('Name', row.get('Stock', 'Unknown'))
+            stock_name = str(row.get('Name', row.get('InstrumentKey', 'Unknown')))
             lock_time = lock_map.get(stock_name, {}).get("Lock_Time", "-")
             
-            # Color Logic
+            # Colors
             if decision == "AI_SELECTED":
-               color = "#00FF7F"
-               bg_color = "rgba(0,255,127,0.1)"
+               color, bg_color = "#00FF7F", "rgba(0,255,127,0.1)"
             elif decision == "FALLBACK_SELECTED":
-                 color = "#FBBF24"
-                 bg_color = "rgba(251,191,36,0.1)"
+                 color, bg_color = "#FBBF24", "rgba(251,191,36,0.1)"
             else:
-                color = "#9ca3af"
-                bg_color = "rgba(156,163,175,0.1)"
+                color, bg_color = "#9ca3af", "rgba(156,163,175,0.1)"
 
             st.markdown(f"""
             <div style="padding: 20px; border-radius: 12px; border: 1px solid {color}; background-color: {bg_color}; margin-bottom: 15px;">
@@ -671,15 +657,14 @@ def render_ai_signals_view(selected_date):
                 <div style="display:flex; gap: 20px; font-size: 14px; color: #9ca3af;">
                     <div><strong>Price:</strong> <span style="color:white;">{row.get('SignalPrice', '-')}</span></div>
                     <div><strong>OI Chg:</strong> <span style="color:white;">{row.get('OI_Change', '-')}%</span></div>
-                    <div><strong>RS Score:</strong> <span style="color:white;">{row.get('RS_Score', '-')}</span></div>
+                    <div><strong>Score:</strong> <span style="color:white;">{row.get('Score', row.get('Signal_Generated_Score', '-'))}</span></div>
                     <div><strong>Lock Time:</strong> {lock_time}</div>
-                    <div><strong>Score:</strong> {row.get('Score','-')}</div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
-            
+
     except Exception as e:
-        st.error("🚨 Error loading AI signals.")
+        st.error("🚨 CRITICAL ERROR: The AI Signal page crashed.")
         st.code(traceback.format_exc(), language="python")
 
 def render_swing_dashboard(selected_date):
