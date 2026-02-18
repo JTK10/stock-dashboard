@@ -891,6 +891,71 @@ def render_swing_dashboard(selected_date):
         hide_index=True
     )
 
+def render_swing_analytics():
+
+    st.header("📈 Swing Performance Analytics")
+
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
+        sent_alerts_table = dynamodb.Table(DYNAMODB_TABLE)
+        resp = sent_alerts_table.query(
+            KeyConditionExpression=Key('PK').eq("SWING_HISTORY")
+        )
+        items = resp.get("Items", [])
+    except Exception as e:
+        st.error(f"Error loading swing analytics: {e}")
+        items = []
+
+    if not items:
+        st.warning("No closed swing trades yet.")
+        return
+
+    df = pd.DataFrame(items)
+
+    df["ReturnPct"] = pd.to_numeric(df["ReturnPct"])
+    df["Holding_Days"] = pd.to_numeric(df["Holding_Days"])
+
+    total_trades = len(df)
+    win_rate = (df["ReturnPct"] > 0).mean() * 100
+    avg_return = df["ReturnPct"].mean()
+    avg_hold = df["Holding_Days"].mean()
+    max_win = df["ReturnPct"].max()
+    max_loss = df["ReturnPct"].min()
+
+    c1,c2,c3,c4,c5 = st.columns(5)
+
+    c1.metric("Total Trades", total_trades)
+    c2.metric("Win Rate", f"{win_rate:.1f}%")
+    c3.metric("Avg Return", f"{avg_return:.2f}%")
+    c4.metric("Avg Hold Days", f"{avg_hold:.1f}")
+    c5.metric("Best Trade", f"{max_win:.2f}%")
+
+    st.divider()
+
+    st.subheader("📊 Return Distribution")
+    st.bar_chart(df["ReturnPct"])
+
+    st.subheader("📈 Equity Curve")
+
+    df = df.sort_values("Entry_Date")
+    df["Equity"] = (1 + df["ReturnPct"]/100).cumprod()
+
+    st.line_chart(df.set_index("Entry_Date")["Equity"])
+
+    st.subheader("📋 Trade Log")
+
+    st.dataframe(df[
+        [
+            "Symbol",
+            "Direction",
+            "Entry_Date",
+            "Exit_Date",
+            "ReturnPct",
+            "Holding_Days",
+            "Exit_Reason"
+        ]
+    ])
+
 # =========================================================
 # MAIN
 # =========================================================
@@ -902,6 +967,7 @@ with st.sidebar:
         [
             "🚀 Smart Radar",
             "📊 Swing Trading",
+            "📈 Swing Analytics",
             "🧠 AI SIGNAL",
             "📈 Market Velocity",
             "📊 Sector Heatmap"
@@ -916,6 +982,8 @@ if page == "🚀 Smart Radar":
     render_live_alerts(selected_date)
 elif page == "📊 Swing Trading":
     render_swing_dashboard(selected_date)
+elif page == "📈 Swing Analytics":
+    render_swing_analytics()
 elif page == "🧠 AI SIGNAL":
     render_ai_signals_view(selected_date)
 elif page == "📈 Market Velocity":
