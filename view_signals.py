@@ -346,26 +346,59 @@ def load_data_from_dynamodb(target_date, signal_type=None):
     try:
         dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
         table = dynamodb.Table(DYNAMODB_TABLE)
-        target_date_str = target_date.isoformat()
-        response = table.scan(FilterExpression=Attr("Date").eq(target_date_str))
-        items = response.get('Items', [])
-        while 'LastEvaluatedKey' in response:
-            response = table.scan(
-                FilterExpression=Attr("Date").eq(target_date_str),
-                ExclusiveStartKey=response['LastEvaluatedKey']
-            )
-            items.extend(response.get('Items', []))
-    except: return pd.DataFrame()
+        date_str = target_date.isoformat()
 
-    if not items: return pd.DataFrame()
-    df = pd.DataFrame([convert_decimal(item) for item in items])
-    if signal_type and 'Signal' in df.columns:
-        df = df[df['Signal'] == signal_type].copy()
-    
-    numeric = ['SignalPrice', 'OI_Change']
-    for c in numeric: 
-        if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
-    return df
+        # Step 1: Get instrument keys from history (FAST partition query)
+        history_pk = f"HISTORY#BOOST#{date_str}"
+        history_response = table.query(
+            KeyConditionExpression=Key('PK').eq(history_pk)
+        )
+        history_items = history_response.get("Items", [])
+
+        instrument_keys = set()
+
+        for record in history_items:
+            try:
+                raw = json.loads(record.get("Data", "[]"))
+                if isinstance(raw, str):
+                    raw = json.loads(raw)
+                for item in raw:
+                    if "InstrumentKey" in item:
+                        instrument_keys.add(item["InstrumentKey"])
+            except:
+                continue
+
+        # Step 2: Direct get_item for each instrument (NO SCAN)
+        items = []
+        for key in instrument_keys:
+            pk = f"INST#{key}#{date_str}"
+            sk = "SIGNAL#INTRADAY_BOOST#LIVE"
+
+            try:
+                resp = table.get_item(Key={"PK": pk, "SK": sk})
+                if "Item" in resp:
+                    items.append(convert_decimal(resp["Item"]))
+            except:
+                continue
+
+        if not items:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(items)
+
+        if signal_type and 'Signal' in df.columns:
+            df = df[df['Signal'] == signal_type].copy()
+
+        numeric = ['SignalPrice', 'OI_Change']
+        for c in numeric:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+
+        return df
+
+    except Exception as e:
+        st.error(f"DynamoDB optimized fetch error: {e}")
+        return pd.DataFrame()
 
 @st.cache_data(ttl=60)
 def load_nse_sector_data():
@@ -611,44 +644,7 @@ def render_ai_signals_view(selected_date):
         registry = load_daily_ai_registry(selected_date)
         
         # 2. SMART FETCH STRATEGY
-        # Attempt 1: Standard Scan
         ai_df = load_data_from_dynamodb(selected_date)
-        
-        # Attempt 2: Direct Fetch (Fallback if Scan fails but Registry exists)
-        if (ai_df.empty or 'AI_Decision' not in ai_df.columns) and registry:
-            # We need Instrument Keys to fetch specific items. 
-            # We can get them from the History which we know works.
-            history = load_todays_history_optimized(selected_date)
-            name_to_key = {}
-            
-            # extract mapping from history
-            for record in history:
-                try:
-                    raw = json.loads(record.get('Data', '[]'))
-                    if isinstance(raw, str): raw = json.loads(raw)
-                    for item in raw:
-                        if 'Name' in item and 'InstrumentKey' in item:
-                            name_to_key[item['Name']] = item['InstrumentKey']
-                except: continue
-            
-            # Now fetch specific items for registered stocks
-            dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
-            table = dynamodb.Table(DYNAMODB_TABLE)
-            direct_items = []
-            
-            for stock_name in registry:
-                if stock_name in name_to_key:
-                    key = name_to_key[stock_name]
-                    pk = f"INST#{key}#{selected_date.isoformat()}"
-                    sk = "SIGNAL#INTRADAY_BOOST#LIVE"
-                    try:
-                        resp = table.get_item(Key={"PK": pk, "SK": sk})
-                        if 'Item' in resp:
-                            direct_items.append(convert_decimal(resp['Item']))
-                    except: pass
-            
-            if direct_items:
-                ai_df = pd.DataFrame(direct_items)
 
         if ai_df.empty:
             if registry:
@@ -863,4 +859,3 @@ elif page == "📈 Market Velocity":
     render_intraday_boost(selected_date)
 elif page == "📊 Sector Heatmap":
     render_sector_view()
-
