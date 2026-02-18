@@ -607,88 +607,104 @@ def render_ai_signals_view(selected_date):
         st.header("🧠 AI Verdicts")
         st.info("Live AI analysis with Option Chain & Trading Plan")
         
-        # 1. Load data
+        # 1. LOAD REGISTRY (The Source of Truth)
+        registry = load_daily_ai_registry(selected_date)
+        
+        # 2. SMART FETCH STRATEGY
+        # Attempt 1: Standard Scan
         ai_df = load_data_from_dynamodb(selected_date)
         
+        # Attempt 2: Direct Fetch (Fallback if Scan fails but Registry exists)
+        if (ai_df.empty or 'AI_Decision' not in ai_df.columns) and registry:
+            # We need Instrument Keys to fetch specific items. 
+            # We can get them from the History which we know works.
+            history = load_todays_history_optimized(selected_date)
+            name_to_key = {}
+            
+            # extract mapping from history
+            for record in history:
+                try:
+                    raw = json.loads(record.get('Data', '[]'))
+                    if isinstance(raw, str): raw = json.loads(raw)
+                    for item in raw:
+                        if 'Name' in item and 'InstrumentKey' in item:
+                            name_to_key[item['Name']] = item['InstrumentKey']
+                except: continue
+            
+            # Now fetch specific items for registered stocks
+            dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
+            table = dynamodb.Table(DYNAMODB_TABLE)
+            direct_items = []
+            
+            for stock_name in registry:
+                if stock_name in name_to_key:
+                    key = name_to_key[stock_name]
+                    pk = f"INST#{key}#{selected_date.isoformat()}"
+                    sk = "SIGNAL#INTRADAY_BOOST#LIVE"
+                    try:
+                        resp = table.get_item(Key={"PK": pk, "SK": sk})
+                        if 'Item' in resp:
+                            direct_items.append(convert_decimal(resp['Item']))
+                    except: pass
+            
+            if direct_items:
+                ai_df = pd.DataFrame(direct_items)
+
         if ai_df.empty:
-            st.info("⏳ Waiting for AI Signals... (No data found for today)")
+            if registry:
+                st.warning(f"⚠️ AI has selected stocks ({', '.join(registry)}), but live details are syncing. Please wait.")
+            else:
+                st.info("⏳ Waiting for AI Signals... (No active Verdicts yet)")
             return
             
-        # 2. Filter exactly by Sort Key
+        # 3. Filter Logic
+        # Filter 1: Must be the Live Signal SK
         if 'SK' in ai_df.columns:
             ai_df = ai_df[ai_df['SK'] == 'SIGNAL#INTRADAY_BOOST#LIVE'].copy()
             
-        # 3. Ensure columns exist
-        if ai_df.empty:
-            st.info("⏳ Waiting for AI Signals... (No active Verdicts yet)")
-            return
+        # Filter 2: Must be in Registry OR Explicitly Selected
+        # This handles cases where Scan returns many items but we only want the AI ones
+        if 'Name' in ai_df.columns:
+            is_in_registry = ai_df['Name'].isin(registry)
+            is_selected = False
+            if 'AI_Decision' in ai_df.columns:
+                is_selected = ai_df['AI_Decision'].isin(['AI_SELECTED', 'FALLBACK_SELECTED'])
             
-        # --- FIX FOR PERSISTENCE: Use Registry ---
-        registry = load_daily_ai_registry(selected_date)
-        
-        # Ensure 'Name' column exists
-        if 'Name' not in ai_df.columns:
-             st.info("⏳ Waiting for AI Signals... (Data structure pending)")
-             return
-
-        # Check if column exists, if not create it
-        if 'AI_Decision' not in ai_df.columns:
-            ai_df['AI_Decision'] = 'N/A'
-
-        # Filter Logic:
-        # Keep row if:
-        # A) AI_Decision is explicitly SELECTED
-        # B) OR Name is in the Daily Registry (Recovered Signal)
-        
-        is_selected = ai_df['AI_Decision'].isin(['AI_SELECTED', 'FALLBACK_SELECTED'])
-        is_in_registry = ai_df['Name'].isin(registry)
-        
-        ai_df = ai_df[is_selected | is_in_registry].copy()
+            ai_df = ai_df[is_in_registry | is_selected].copy()
         
         if ai_df.empty:
-            st.info("⏳ Waiting for AI Signals... (No active Verdicts yet)")
+            st.info("⏳ Waiting for AI Signals... (No matching data found)")
             return
             
-        # 4. Load Locks
+        # 4. Load Locks & Sort
         locks = load_lock_data(selected_date)
         lock_map = {x.get("Stock", ""): x for x in locks}
         
-        # 5. Sort newest to top
         if 'Time' in ai_df.columns:
             ai_df = ai_df.sort_values(by='Time', ascending=False)
             
-        # 6. Render the Cards
+        # 5. Render Cards
         for _, row in ai_df.iterrows():
+            # ... (Rest of rendering logic remains mostly same, safe access) ...
             decision = str(row.get('AI_Decision', 'N/A'))
             stock_name = str(row.get('Name', row.get('InstrumentKey', 'Unknown')))
             
-            # --- RECOVERY LOGIC ---
-            # If decision is N/A but stock is in registry, it means it was overwritten.
-            # We force display it as "AI_SELECTED" but mark it as Recovered.
+            # Recovery Label
             if decision == 'N/A' and stock_name in registry:
                 decision = "AI_SELECTED (Recall)"
-                # Since details are wiped, we might not have Target/SL
-                # We can check if they are 'N/A'
             
-            # Safely grab the time
             ai_time = str(row.get('Signal_Generated_At', row.get('Time', '-')))
-            if pd.isna(ai_time) or ai_time.strip() in ["", "nan"]: 
-                ai_time = str(row.get('Time', '-'))
+            if pd.isna(ai_time) or ai_time.strip() in ["", "nan"]: ai_time = str(row.get('Time', '-'))
                 
-            lock_time = lock_map.get(stock_name, {}).get("Lock_Time", "-")
-            
             # Extract New Fields
             target = row.get('Target', 'N/A')
             stoploss = row.get('StopLoss', 'N/A')
             risk_reward = row.get('RiskReward', 'N/A')
             
-            # If overwritten, these might be N/A. We can show a hint.
             if target == 'N/A' and "Recall" in decision:
-                target = "See Telegram"
-                stoploss = "See Telegram"
-                risk_reward = "See Telegram"
+                target = "See Telegram" # Fallback if data was overwritten
             
-            # Extract Options Data
+            # Options
             pcr = row.get('Option_PCR', '-')
             max_pain = row.get('Option_MaxPain', '-')
             res = row.get('Option_Res', '-')
@@ -704,8 +720,6 @@ def render_ai_signals_view(selected_date):
 
             st.markdown(f"""
             <div style="padding: 20px; border-radius: 12px; border: 1px solid {color}; background-color: {bg_color}; margin-bottom: 15px;">
-                
-                <!-- HEADER -->
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
                     <h3 style="margin:0; color:white;">{stock_name}</h3>
                     <div style="display:flex; align-items:center; gap:10px;">
@@ -713,13 +727,9 @@ def render_ai_signals_view(selected_date):
                         <span style="background:{color}; color:black; padding:4px 12px; border-radius:4px; font-weight:800;">{decision}</span>
                     </div>
                 </div>
-                
-                <!-- REASON -->
                 <div style="color: #e5e7eb; font-size: 16px; margin-bottom: 15px;">
                     <i>" {row.get('AI_Reason', '-')} "</i>
                 </div>
-
-                <!-- TRADING PLAN (NEW) -->
                 <div style="margin-bottom: 15px; padding: 10px; background: rgba(0,0,0,0.3); border-radius: 8px;">
                     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; text-align: center;">
                         <div>
@@ -736,13 +746,10 @@ def render_ai_signals_view(selected_date):
                         </div>
                     </div>
                 </div>
-
-                <!-- METRICS & OPTIONS -->
                 <div style="display:flex; justify-content: space-between; font-size: 13px; color: #9ca3af; flex-wrap: wrap; gap: 10px;">
                     <div style="display:flex; gap: 15px;">
                         <div>Price: <span style="color:white;">{row.get('SignalPrice', '-')}</span></div>
                         <div>OI Chg: <span style="color:white;">{row.get('OI_Change', '-')}%</span></div>
-                        <div>Score: <span style="color:white;">{row.get('Score', row.get('Signal_Generated_Score', '-'))}</span></div>
                     </div>
                     <div style="display:flex; gap: 15px;">
                         <div>PCR: <span style="color:#38bdf8;">{pcr}</span></div>
@@ -750,7 +757,6 @@ def render_ai_signals_view(selected_date):
                         <div>Walls: <span style="color:#38bdf8;">{res} / {sup}</span></div>
                     </div>
                 </div>
-
             </div>
             """, unsafe_allow_html=True)
 
@@ -857,3 +863,4 @@ elif page == "📈 Market Velocity":
     render_intraday_boost(selected_date)
 elif page == "📊 Sector Heatmap":
     render_sector_view()
+
