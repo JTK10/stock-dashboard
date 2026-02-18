@@ -583,27 +583,27 @@ def render_sector_view():
     st.dataframe(stats, hide_index=True, use_container_width=True)
 
 # =========================================================
-# PAGE 4: AI SIGNAL DASHBOARD (FINAL FIX)
+# PAGE 4: AI SIGNAL DASHBOARD (UPDATED)
 # =========================================================
 def render_ai_signals_view(selected_date):
     import traceback
     try:
         st_autorefresh(interval=60 * 1000, key="datarefresh_ai")
         st.header("🧠 AI Verdicts")
-        st.info("Live AI analysis")
+        st.info("Live AI analysis with Option Chain & Trading Plan")
         
-        # 1. Load data using your proven DB scanner
+        # 1. Load data
         ai_df = load_data_from_dynamodb(selected_date)
         
         if ai_df.empty:
             st.info("⏳ Waiting for AI Signals... (No data found for today)")
             return
             
-        # 2. THE FIX: Filter exactly by your Sort Key!
+        # 2. Filter exactly by Sort Key
         if 'SK' in ai_df.columns:
             ai_df = ai_df[ai_df['SK'] == 'SIGNAL#INTRADAY_BOOST#LIVE'].copy()
             
-        # 3. Ensure the AI column actually exists and filter for selections
+        # 3. Ensure columns exist
         if ai_df.empty or 'AI_Decision' not in ai_df.columns:
             st.info("⏳ Waiting for AI Signals... (No active Verdicts yet)")
             return
@@ -634,6 +634,17 @@ def render_ai_signals_view(selected_date):
             stock_name = str(row.get('Name', row.get('InstrumentKey', 'Unknown')))
             lock_time = lock_map.get(stock_name, {}).get("Lock_Time", "-")
             
+            # Extract New Fields
+            target = row.get('Target', 'N/A')
+            stoploss = row.get('StopLoss', 'N/A')
+            risk_reward = row.get('RiskReward', 'N/A')
+            
+            # Extract Options Data
+            pcr = row.get('Option_PCR', '-')
+            max_pain = row.get('Option_MaxPain', '-')
+            res = row.get('Option_Res', '-')
+            sup = row.get('Option_Sup', '-')
+            
             # Colors
             if decision == "AI_SELECTED":
                color, bg_color = "#00FF7F", "rgba(0,255,127,0.1)"
@@ -644,6 +655,8 @@ def render_ai_signals_view(selected_date):
 
             st.markdown(f"""
             <div style="padding: 20px; border-radius: 12px; border: 1px solid {color}; background-color: {bg_color}; margin-bottom: 15px;">
+                
+                <!-- HEADER -->
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
                     <h3 style="margin:0; color:white;">{stock_name}</h3>
                     <div style="display:flex; align-items:center; gap:10px;">
@@ -651,15 +664,44 @@ def render_ai_signals_view(selected_date):
                         <span style="background:{color}; color:black; padding:4px 12px; border-radius:4px; font-weight:800;">{decision}</span>
                     </div>
                 </div>
-                <div style="color: #e5e7eb; font-size: 16px; margin-bottom: 10px;">
+                
+                <!-- REASON -->
+                <div style="color: #e5e7eb; font-size: 16px; margin-bottom: 15px;">
                     <i>" {row.get('AI_Reason', '-')} "</i>
                 </div>
-                <div style="display:flex; gap: 20px; font-size: 14px; color: #9ca3af;">
-                    <div><strong>Price:</strong> <span style="color:white;">{row.get('SignalPrice', '-')}</span></div>
-                    <div><strong>OI Chg:</strong> <span style="color:white;">{row.get('OI_Change', '-')}%</span></div>
-                    <div><strong>Score:</strong> <span style="color:white;">{row.get('Score', row.get('Signal_Generated_Score', '-'))}</span></div>
-                    <div><strong>Lock Time:</strong> {lock_time}</div>
+
+                <!-- TRADING PLAN (NEW) -->
+                <div style="margin-bottom: 15px; padding: 10px; background: rgba(0,0,0,0.3); border-radius: 8px;">
+                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; text-align: center;">
+                        <div>
+                            <div style="color:#9ca3af; font-size:11px; letter-spacing:1px;">TARGET</div>
+                            <div style="color:#00FF7F; font-weight:bold; font-size:16px;">{target}</div>
+                        </div>
+                        <div style="border-left: 1px solid rgba(255,255,255,0.1); border-right: 1px solid rgba(255,255,255,0.1);">
+                            <div style="color:#9ca3af; font-size:11px; letter-spacing:1px;">STOP LOSS</div>
+                            <div style="color:#EF4444; font-weight:bold; font-size:16px;">{stoploss}</div>
+                        </div>
+                        <div>
+                            <div style="color:#9ca3af; font-size:11px; letter-spacing:1px;">RISK/REWARD</div>
+                            <div style="color:white; font-weight:bold; font-size:16px;">{risk_reward}</div>
+                        </div>
+                    </div>
                 </div>
+
+                <!-- METRICS & OPTIONS -->
+                <div style="display:flex; justify-content: space-between; font-size: 13px; color: #9ca3af; flex-wrap: wrap; gap: 10px;">
+                    <div style="display:flex; gap: 15px;">
+                        <div>Price: <span style="color:white;">{row.get('SignalPrice', '-')}</span></div>
+                        <div>OI Chg: <span style="color:white;">{row.get('OI_Change', '-')}%</span></div>
+                        <div>Score: <span style="color:white;">{row.get('Score', row.get('Signal_Generated_Score', '-'))}</span></div>
+                    </div>
+                    <div style="display:flex; gap: 15px;">
+                        <div>PCR: <span style="color:#38bdf8;">{pcr}</span></div>
+                        <div>Max Pain: <span style="color:#38bdf8;">{max_pain}</span></div>
+                        <div>Walls: <span style="color:#38bdf8;">{res} / {sup}</span></div>
+                    </div>
+                </div>
+
             </div>
             """, unsafe_allow_html=True)
 
