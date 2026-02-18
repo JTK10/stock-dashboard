@@ -238,7 +238,7 @@ def calculate_staircase_locally(history_ois, break_type):
     good_steps = [s for s in steps if s > 0.2]
     return len(good_steps) >= 2
 
-def process_radar_data(history_items):
+def process_radar_data(history_items, cumulative_scores_df):
     """
     Processes raw history blobs to calculate Metrics & Force-Check Scores.
     """
@@ -281,6 +281,8 @@ def process_radar_data(history_items):
         latest_score = float(latest.get("Score", latest.get("Best_Score", 0)))
         break_type = str(latest.get('BreakType', 'INSIDE')).upper()
         
+        signal_gen_score = 0
+        
         # 3. Entry Logic
         if latest_score > 20:
             potential_entries = group[(group['OI_Change'].abs() > 1.5) & (group['BreakType'].astype(str).str.contains("BROKE", na=False))]
@@ -289,6 +291,7 @@ def process_radar_data(history_items):
                 first_entry = potential_entries.iloc[0]
                 entry_price = float(first_entry['SignalPrice'])
                 entry_time = first_entry['SnapshotTime']
+                signal_gen_score = float(first_entry.get("Score", first_entry.get("Best_Score", 0)))
                 
                 # Calculate Moves
                 is_bullish = latest['OI_Change'] > 0
@@ -324,6 +327,7 @@ def process_radar_data(history_items):
         stats.append({
             'Name': stock_name,
             'Latest Score': round(latest_score, 1),
+            'Signal_Generated_Score': round(signal_gen_score, 1),
             'Break': latest.get('BreakType', 'INSIDE'),
             'Entry Time': entry_time,
             'Entry Price': entry_price,
@@ -338,8 +342,27 @@ def process_radar_data(history_items):
             'Option_PCR': latest.get('Option_PCR', '-'),
             'Option_MaxPain': latest.get('Option_MaxPain', '-')
         })
-        
-    return pd.DataFrame(stats).sort_values('Latest Score', ascending=False)
+    
+    if not stats:
+        return pd.DataFrame()
+
+    radar_df = pd.DataFrame(stats)
+
+    if not cumulative_scores_df.empty:
+        radar_df = pd.merge(radar_df, cumulative_scores_df, on="Name", how="left")
+        radar_df['Peak_Score'] = radar_df['Peak_Score'].fillna(0)
+    else:
+        radar_df['Peak_Score'] = 0
+
+    radar_df['Peak_Score'] = radar_df[['Peak_Score', 'Latest Score']].max(axis=1)
+
+    radar_df["SmartRank"] = (
+        0.5 * radar_df['Peak_Score'] +
+        0.3 * radar_df['Latest Score'] +
+        0.2 * radar_df['Signal_Generated_Score']
+    )
+    
+    return radar_df.sort_values('SmartRank', ascending=False)
 
 @st.cache_data(ttl=60)
 def load_data_from_dynamodb(target_date, signal_type=None):
@@ -438,6 +461,43 @@ def load_daily_ai_registry(target_date):
         return set()
 
 @st.cache_data(ttl=60)
+def load_cumulative_scores(target_date):
+    """
+    Fetches the cumulative best scores for all stocks for a given day.
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
+        table = dynamodb.Table(DYNAMODB_TABLE)
+        pk = f"CUMULATIVE_SCORE#{target_date.isoformat()}"
+        response = table.query(KeyConditionExpression=Key('PK').eq(pk))
+        items = response.get("Items", [])
+        
+        while 'LastEvaluatedKey' in response:
+            response = table.query(
+                KeyConditionExpression=Key('PK').eq(pk),
+                ExclusiveStartKey=response['LastEvaluatedKey']
+            )
+            items.extend(response.get('Items', []))
+
+        if not items:
+            return pd.DataFrame(columns=['Name', 'Peak_Score'])
+        
+        df = pd.DataFrame(convert_decimal(items))
+        if df.empty:
+            return pd.DataFrame(columns=['Name', 'Peak_Score'])
+        
+        df = df.rename(columns={'SK': 'Name', 'Best_Score': 'Peak_Score'})
+        
+        if 'Peak_Score' in df.columns:
+            df['Peak_Score'] = pd.to_numeric(df['Peak_Score'], errors='coerce').fillna(0)
+        
+        return df[['Name', 'Peak_Score']]
+        
+    except Exception as e:
+        st.error(f"Error loading cumulative scores: {e}")
+        return pd.DataFrame(columns=['Name', 'Peak_Score'])
+
+@st.cache_data(ttl=60)
 def load_swing_candidates(selected_date):
     try:
         dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
@@ -480,13 +540,14 @@ def render_live_alerts(selected_date):
     
     # 1. Load History
     history_items = load_todays_history_optimized(selected_date)
+    cumulative_scores_df = load_cumulative_scores(selected_date)
     
     if not history_items:
         st.info("No data found for this date.")
         return
 
     # 2. Process
-    radar_df = process_radar_data(history_items)
+    radar_df = process_radar_data(history_items, cumulative_scores_df)
     locks = load_lock_data(selected_date)
     lock_map = {x["Stock"]: x for x in locks}
 
@@ -520,13 +581,15 @@ def render_live_alerts(selected_date):
     
     st.data_editor(
         display_df[[
-            'Chart', 'Name', 'Latest Score', 'Locked', 'Lock Time', 'Reentry', 'Break',
+            'Chart', 'Name', 'SmartRank', 'Latest Score', 'Peak_Score', 'Locked', 'Lock Time', 'Reentry', 'Break',
             'Entry Time', 'Entry Price', 'Current Price', 'Max Move %', 'Current Move %', 'OI %'
         ]],
         column_config={
             "Chart": st.column_config.LinkColumn("View", display_text="📊", width="small"),
             "Name": st.column_config.TextColumn("Stock", width="medium"),
-            "Latest Score": st.column_config.ProgressColumn("Smart Score", min_value=0, max_value=60, format="%.1f"),
+            "SmartRank": st.column_config.ProgressColumn("Smart Rank", min_value=0, max_value=100, format="%.1f"),
+            "Latest Score": st.column_config.NumberColumn("Latest", format="%.1f"),
+            "Peak_Score": st.column_config.NumberColumn("Peak", format="%.1f"),
             "Locked": st.column_config.TextColumn("Locked", width="small"),
             "Lock Time": st.column_config.TextColumn("Lock Time", width="small"),
             "Reentry": st.column_config.TextColumn("Reentry", width="small"),
