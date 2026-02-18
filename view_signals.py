@@ -503,13 +503,11 @@ def load_swing_candidates(selected_date):
         dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
         table = dynamodb.Table(DYNAMODB_TABLE)
 
-        pk = f"SWING_CANDIDATE#{selected_date.isoformat()}"
-        response = table.query(KeyConditionExpression=Key('PK').eq(pk))
-        items = response.get("Items", [])
-        return items
-
-    except Exception as e:
-        st.error(f"Error loading swing data: {e}")
+        response = table.query(
+            KeyConditionExpression=Key('PK').eq("SWING_ACTIVE")
+        )
+        return response.get("Items", [])
+    except:
         return []
 
 def metric_card(title, value, subtitle=None, color="#e5e7eb", glow=False):
@@ -990,3 +988,4 @@ elif page == "📈 Market Velocity":
     render_intraday_boost(selected_date)
 elif page == "📊 Sector Heatmap":
     render_sector_view()
+
