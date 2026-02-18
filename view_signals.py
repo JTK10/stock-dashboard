@@ -390,6 +390,21 @@ def load_lock_data(target_date):
         return []
 
 @st.cache_data(ttl=60)
+def load_daily_ai_registry(target_date):
+    """
+    Fetches the persistent daily AI selection list.
+    This helps recover signals that may have been overwritten in the live table.
+    """
+    try:
+        dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
+        table = dynamodb.Table(DYNAMODB_TABLE)
+        pk = f"AI_DAILY_ALERT#{target_date.isoformat()}"
+        response = table.query(KeyConditionExpression=Key('PK').eq(pk))
+        return {item['SK'] for item in response.get('Items', [])}
+    except:
+        return set()
+
+@st.cache_data(ttl=60)
 def load_swing_candidates(selected_date):
     try:
         dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
@@ -604,11 +619,31 @@ def render_ai_signals_view(selected_date):
             ai_df = ai_df[ai_df['SK'] == 'SIGNAL#INTRADAY_BOOST#LIVE'].copy()
             
         # 3. Ensure columns exist
-        if ai_df.empty or 'AI_Decision' not in ai_df.columns:
+        if ai_df.empty:
             st.info("⏳ Waiting for AI Signals... (No active Verdicts yet)")
             return
             
-        ai_df = ai_df[ai_df['AI_Decision'].isin(['AI_SELECTED', 'FALLBACK_SELECTED'])].copy()
+        # --- FIX FOR PERSISTENCE: Use Registry ---
+        registry = load_daily_ai_registry(selected_date)
+        
+        # Ensure 'Name' column exists
+        if 'Name' not in ai_df.columns:
+             st.info("⏳ Waiting for AI Signals... (Data structure pending)")
+             return
+
+        # Check if column exists, if not create it
+        if 'AI_Decision' not in ai_df.columns:
+            ai_df['AI_Decision'] = 'N/A'
+
+        # Filter Logic:
+        # Keep row if:
+        # A) AI_Decision is explicitly SELECTED
+        # B) OR Name is in the Daily Registry (Recovered Signal)
+        
+        is_selected = ai_df['AI_Decision'].isin(['AI_SELECTED', 'FALLBACK_SELECTED'])
+        is_in_registry = ai_df['Name'].isin(registry)
+        
+        ai_df = ai_df[is_selected | is_in_registry].copy()
         
         if ai_df.empty:
             st.info("⏳ Waiting for AI Signals... (No active Verdicts yet)")
@@ -625,19 +660,33 @@ def render_ai_signals_view(selected_date):
         # 6. Render the Cards
         for _, row in ai_df.iterrows():
             decision = str(row.get('AI_Decision', 'N/A'))
+            stock_name = str(row.get('Name', row.get('InstrumentKey', 'Unknown')))
+            
+            # --- RECOVERY LOGIC ---
+            # If decision is N/A but stock is in registry, it means it was overwritten.
+            # We force display it as "AI_SELECTED" but mark it as Recovered.
+            if decision == 'N/A' and stock_name in registry:
+                decision = "AI_SELECTED (Recall)"
+                # Since details are wiped, we might not have Target/SL
+                # We can check if they are 'N/A'
             
             # Safely grab the time
             ai_time = str(row.get('Signal_Generated_At', row.get('Time', '-')))
             if pd.isna(ai_time) or ai_time.strip() in ["", "nan"]: 
                 ai_time = str(row.get('Time', '-'))
                 
-            stock_name = str(row.get('Name', row.get('InstrumentKey', 'Unknown')))
             lock_time = lock_map.get(stock_name, {}).get("Lock_Time", "-")
             
             # Extract New Fields
             target = row.get('Target', 'N/A')
             stoploss = row.get('StopLoss', 'N/A')
             risk_reward = row.get('RiskReward', 'N/A')
+            
+            # If overwritten, these might be N/A. We can show a hint.
+            if target == 'N/A' and "Recall" in decision:
+                target = "See Telegram"
+                stoploss = "See Telegram"
+                risk_reward = "See Telegram"
             
             # Extract Options Data
             pcr = row.get('Option_PCR', '-')
@@ -646,9 +695,9 @@ def render_ai_signals_view(selected_date):
             sup = row.get('Option_Sup', '-')
             
             # Colors
-            if decision == "AI_SELECTED":
+            if "AI_SELECTED" in decision:
                color, bg_color = "#00FF7F", "rgba(0,255,127,0.1)"
-            elif decision == "FALLBACK_SELECTED":
+            elif "FALLBACK_SELECTED" in decision:
                  color, bg_color = "#FBBF24", "rgba(251,191,36,0.1)"
             else:
                 color, bg_color = "#9ca3af", "rgba(156,163,175,0.1)"
