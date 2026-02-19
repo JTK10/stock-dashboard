@@ -788,7 +788,6 @@ def render_ai_signals_view(selected_date):
             st.markdown(f"""
             <div style="border: 1px solid {color}; background: linear-gradient(145deg, #131722, #0e1117); border-radius: 16px; padding: 24px; margin-bottom: 20px; box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);">
                 
-                <!-- HEADER -->
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
                     <div>
                         <h2 style="margin: 0; color: white; font-size: 24px; font-weight: 800;">{stock_name}</h2>
@@ -799,14 +798,12 @@ def render_ai_signals_view(selected_date):
                     </div>
                 </div>
 
-                <!-- AI REASON -->
                 <div style="background-color: rgba(255, 255, 255, 0.05); border-radius: 8px; padding: 12px; margin-bottom: 20px;">
                     <p style="margin: 0; color: #e5e7eb; font-size: 15px; font-style: italic;">
                         🧠 "{row.get('AI_Reason', 'No reason provided.')}"
                     </p>
                 </div>
 
-                <!-- TRADING PLAN -->
                 <div style="margin-bottom: 20px;">
                     <h4 style="color: #9ca3af; font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 10px; border-bottom: 1px solid #2a2e3a; padding-bottom: 5px;">Trading Plan</h4>
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 16px; text-align: center;">
@@ -825,7 +822,6 @@ def render_ai_signals_view(selected_date):
                     </div>
                 </div>
                 
-                <!-- DATA POINTS -->
                 <div>
                     <h4 style="color: #9ca3af; font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 10px; border-bottom: 1px solid #2a2e3a; padding-bottom: 5px;">Key Metrics</h4>
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; font-size: 14px; color: #9ca3af;">
@@ -996,13 +992,22 @@ def render_swing_analytics():
 # =========================================================
 with st.sidebar:
     st.markdown("""
-    <div style="padding-top: 1rem; padding-bottom: 1rem;">
-        <h1 style="color: #00FF7F; text-align: center; font-family: 'Inter', sans-serif; font-weight: 800; font-size: 2rem;">
-            📡 QUANT RADAR
+    <div style="
+        background: linear-gradient(45deg, #00ff7f, #00b8d4);
+        border-radius: 10px;
+        padding: 1.5rem;
+        text-align: center;
+        margin-bottom: 1rem;
+        box-shadow: 0 4px 15px rgba(0, 255, 127, 0.2);
+    ">
+        <h1 style="color: white; margin: 0; font-family: 'Inter', sans-serif; font-weight: 900; font-size: 2.5rem; letter-spacing: 2px;">
+            QUANT<span style="color: #0d1117;">RADAR</span>
         </h1>
+        <p style="color: #0d1117; margin: 0; font-family: 'Inter', sans-serif; font-weight: 600; font-size: 0.9rem;">
+            AI-POWERED MARKET INSIGHTS
+        </p>
     </div>
     """, unsafe_allow_html=True)
-    st.markdown("---")
     
     # UPDATED MENU
     page = st.radio(
