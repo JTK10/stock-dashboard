@@ -698,8 +698,9 @@ def render_ai_signals_view(selected_date):
     import traceback
     try:
         st_autorefresh(interval=60 * 1000, key="datarefresh_ai")
-        st.header("🧠 AI Verdicts")
-        st.info("Live AI analysis with Option Chain & Trading Plan")
+        st.markdown("### 🧠 AI Verdicts Dashboard")
+        st.markdown("> *Curated, high-conviction signals powered by our AI model.*")
+        st.markdown("---")
         
         # 1. LOAD REGISTRY (The Source of Truth)
         registry = load_daily_ai_registry(selected_date)
@@ -742,7 +743,6 @@ def render_ai_signals_view(selected_date):
             
         # 5. Render Cards
         for _, row in ai_df.iterrows():
-            # ... (Rest of rendering logic remains mostly same, safe access) ...
             decision = str(row.get('AI_Decision', 'N/A'))
             stock_name = str(row.get('Name', row.get('InstrumentKey', 'Unknown')))
             
@@ -769,49 +769,86 @@ def render_ai_signals_view(selected_date):
             
             # Colors
             if "AI_SELECTED" in decision:
-               color, bg_color = "#00FF7F", "rgba(0,255,127,0.1)"
+               color = "#00FF7F"
             elif "FALLBACK_SELECTED" in decision:
-                 color, bg_color = "#FBBF24", "rgba(251,191,36,0.1)"
+                 color = "#FBBF24"
             else:
-                color, bg_color = "#9ca3af", "rgba(156,163,175,0.1)"
+                color = "#9ca3af"
+
+            # Determine trend icon and color
+            try:
+                oi_change = float(row.get('OI_Change', 0))
+            except (ValueError, TypeError):
+                oi_change = 0
+
+            is_bullish = oi_change > 0
+            trend_icon = "▲" if is_bullish else "▼"
+            trend_color = "#00FF7F" if is_bullish else "#EF4444"
 
             st.markdown(f"""
-            <div style="padding: 20px; border-radius: 12px; border: 1px solid {color}; background-color: {bg_color}; margin-bottom: 15px;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                    <h3 style="margin:0; color:white;">{stock_name}</h3>
-                    <div style="display:flex; align-items:center; gap:10px;">
-                        <span style="color:#9ca3af; font-size:12px; font-family:monospace;">🕒 {ai_time}</span>
-                        <span style="background:{color}; color:black; padding:4px 12px; border-radius:4px; font-weight:800;">{decision}</span>
+            <div style="border: 1px solid {color}; background: linear-gradient(145deg, #131722, #0e1117); border-radius: 16px; padding: 24px; margin-bottom: 20px; box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);">
+                
+                <!-- HEADER -->
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
+                    <div>
+                        <h2 style="margin: 0; color: white; font-size: 24px; font-weight: 800;">{stock_name}</h2>
+                        <span style="color: #9ca3af; font-size: 14px; font-family: monospace;">Signal Time: {ai_time}</span>
+                    </div>
+                    <div style="text-align: right;">
+                        <span style="background-color: {color}; color: black; padding: 6px 14px; border-radius: 8px; font-weight: 700; font-size: 14px;">{decision.replace('_', ' ').title()}</span>
                     </div>
                 </div>
-                <div style="color: #e5e7eb; font-size: 16px; margin-bottom: 15px;">
-                    <i>" {row.get('AI_Reason', '-')} "</i>
+
+                <!-- AI REASON -->
+                <div style="background-color: rgba(255, 255, 255, 0.05); border-radius: 8px; padding: 12px; margin-bottom: 20px;">
+                    <p style="margin: 0; color: #e5e7eb; font-size: 15px; font-style: italic;">
+                        🧠 "{row.get('AI_Reason', 'No reason provided.')}"
+                    </p>
                 </div>
-                <div style="margin-bottom: 15px; padding: 10px; background: rgba(0,0,0,0.3); border-radius: 8px;">
-                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; text-align: center;">
-                        <div>
+
+                <!-- TRADING PLAN -->
+                <div style="margin-bottom: 20px;">
+                    <h4 style="color: #9ca3af; font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 10px; border-bottom: 1px solid #2a2e3a; padding-bottom: 5px;">Trading Plan</h4>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 16px; text-align: center;">
+                        <div style="background: rgba(0, 255, 127, 0.1); padding: 12px; border-radius: 8px; border-left: 3px solid #00FF7F;">
                             <div style="color:#9ca3af; font-size:11px; letter-spacing:1px;">TARGET</div>
-                            <div style="color:#00FF7F; font-weight:bold; font-size:16px;">{target}</div>
+                            <div style="color:#00FF7F; font-weight:bold; font-size:20px; margin-top: 4px;">{target}</div>
                         </div>
-                        <div style="border-left: 1px solid rgba(255,255,255,0.1); border-right: 1px solid rgba(255,255,255,0.1);">
+                        <div style="background: rgba(239, 68, 68, 0.1); padding: 12px; border-radius: 8px; border-left: 3px solid #EF4444;">
                             <div style="color:#9ca3af; font-size:11px; letter-spacing:1px;">STOP LOSS</div>
-                            <div style="color:#EF4444; font-weight:bold; font-size:16px;">{stoploss}</div>
+                            <div style="color:#EF4444; font-weight:bold; font-size:20px; margin-top: 4px;">{stoploss}</div>
                         </div>
-                        <div>
+                        <div style="background: rgba(255, 255, 255, 0.05); padding: 12px; border-radius: 8px;">
                             <div style="color:#9ca3af; font-size:11px; letter-spacing:1px;">RISK/REWARD</div>
-                            <div style="color:white; font-weight:bold; font-size:16px;">{risk_reward}</div>
+                            <div style="color:white; font-weight:bold; font-size:20px; margin-top: 4px;">{risk_reward}</div>
                         </div>
                     </div>
                 </div>
-                <div style="display:flex; justify-content: space-between; font-size: 13px; color: #9ca3af; flex-wrap: wrap; gap: 10px;">
-                    <div style="display:flex; gap: 15px;">
-                        <div>Price: <span style="color:white;">{row.get('SignalPrice', '-')}</span></div>
-                        <div>OI Chg: <span style="color:white;">{row.get('OI_Change', '-')}%</span></div>
-                    </div>
-                    <div style="display:flex; gap: 15px;">
-                        <div>PCR: <span style="color:#38bdf8;">{pcr}</span></div>
-                        <div>Max Pain: <span style="color:#38bdf8;">{max_pain}</span></div>
-                        <div>Walls: <span style="color:#38bdf8;">{res} / {sup}</span></div>
+                
+                <!-- DATA POINTS -->
+                <div>
+                    <h4 style="color: #9ca3af; font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 10px; border-bottom: 1px solid #2a2e3a; padding-bottom: 5px;">Key Metrics</h4>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; font-size: 14px; color: #9ca3af;">
+                        <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #222634; padding-bottom: 5px;">
+                            <span>Entry Price:</span>
+                            <span style="color:white; font-weight: 600;">{row.get('SignalPrice', '-')}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #222634; padding-bottom: 5px;">
+                            <span>OI Change:</span>
+                            <span style="color:{trend_color}; font-weight: 600;">{oi_change}% {trend_icon}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #222634; padding-bottom: 5px;">
+                            <span>Option PCR:</span>
+                            <span style="color:#38bdf8; font-weight: 600;">{pcr}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #222634; padding-bottom: 5px;">
+                            <span>Max Pain:</span>
+                            <span style="color:#38bdf8; font-weight: 600;">{max_pain}</span>
+                        </div>
+                         <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #222634; padding-bottom: 5px;">
+                            <span>Option Walls:</span>
+                            <span style="color:#38bdf8; font-weight: 600;">{res} / {sup}</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -958,7 +995,15 @@ def render_swing_analytics():
 # MAIN
 # =========================================================
 with st.sidebar:
-    st.title("QUANT RADAR")
+    st.markdown("""
+    <div style="padding-top: 1rem; padding-bottom: 1rem;">
+        <h1 style="color: #00FF7F; text-align: center; font-family: 'Inter', sans-serif; font-weight: 800; font-size: 2rem;">
+            📡 QUANT RADAR
+        </h1>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown("---")
+    
     # UPDATED MENU
     page = st.radio(
         "Navigate",
@@ -988,4 +1033,3 @@ elif page == "📈 Market Velocity":
     render_intraday_boost(selected_date)
 elif page == "📊 Sector Heatmap":
     render_sector_view()
-
